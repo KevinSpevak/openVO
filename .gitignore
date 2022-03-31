@@ -1,4 +1,6 @@
 dist
 distTest
+TODO.txt
 publishing.txt
-src/openVO.egg-info
+**/openVO.egg-info
+**/__pycache__

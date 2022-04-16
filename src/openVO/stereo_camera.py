@@ -23,12 +23,8 @@ class StereoCamera:
         self.stereoSGBM = cv2.StereoSGBM_create(
             sgbm_params["minDisparity"], sgbm_params["numDisparities"], sgbm_params["blockSize"],
             sgbm_params["P1"], sgbm_params["P2"], sgbm_params["disp12MaxDiff"], sgbm_params["preFilterCap"],
-            # TODO: mode=1 still needed?
-            0 and sgbm_params["uniquenessRatio"], sgbm_params["speckleWindowSize"], sgbm_params["speckleRange"], mode=1)
-        print("sgbm",
-              sgbm_params["minDisparity"], sgbm_params["numDisparities"], sgbm_params["blockSize"],
-              sgbm_params["P1"], sgbm_params["P2"], sgbm_params["disp12MaxDiff"], sgbm_params["preFilterCap"],
-              0 and sgbm_params["uniquenessRatio"], sgbm_params["speckleWindowSize"], sgbm_params["speckleRange"])
+            # TODO: mode option
+            sgbm_params["uniquenessRatio"], sgbm_params["speckleWindowSize"], sgbm_params["speckleRange"])#, mode=1)
 
     def undistort_rectify_left(self, img):
         return cv2.remap(img, self.map_left_1, self.map_left_2, cv2.INTER_LINEAR)
@@ -48,7 +44,6 @@ class StereoCamera:
         img_left = self.undistort_rectify_left(cv2.cvtColor(img_left, cv2.COLOR_BGR2GRAY))
         img_right = self.undistort_rectify_right(cv2.cvtColor(img_right, cv2.COLOR_BGR2GRAY))
         disparity = self.stereoSGBM.compute(img_left, img_right).astype(np.float32)/16
-        disp_img = (disparity - disparity.min())/(disparity.max()-disparity.min())
         img_3d = cv2.reprojectImageTo3D(disparity, self.Q)
         return (self.crop_to_valid_region_left(img_3d),
                 self.crop_to_valid_region_left(disparity),

@@ -11,7 +11,8 @@ class StereoOdometer:
     # skip frames with computed transformation with too large change in rotation
     MAX_ROTATION_CHANGE = np.pi/3 # Radians
 
-    def __init__(self, stereo_camera, nfeatures=500, match_threshold=0.8, rigidity_threshold=0, outlier_threshold=0):
+    def __init__(self, stereo_camera, nfeatures=500, match_threshold=0.8, rigidity_threshold=0, \
+                 outlier_threshold=0, preprocessed_frames=False):
         self.stereo = stereo_camera
         # image data for current and previous frames
         self.current_img, self.current_disparity, self.current_3d = None, None, None
@@ -24,7 +25,7 @@ class StereoOdometer:
         self.prev_kps, self.current_kps = None, None
         self.current_kps, self.current_desc = None, None
         self.match_threshold, self.rigidity_threshold = match_threshold, rigidity_threshold
-        self.outlier_threshold = outlier_threshold
+        self.outlier_threshold, self.preprocessed_frames = outlier_threshold, preprocessed_frames
         # Number of successive frames with no coordinate transformation found
         self.skipped_frames = 0
         # transformation of the world frame in the camera's coordinate system
@@ -80,7 +81,7 @@ class StereoOdometer:
         self.current_kps, self.current_desc = next_kps, next_desc
 
     def update(self, img_left, img_right):
-        next_3d, next_disp, next_img = self.stereo.compute_3d(img_left, img_right)
+        next_3d, next_disp, next_img = self.stereo.compute_3d(img_left, img_right, preprocessed=self.preprocessed_frames)
         next_kps, next_desc = self.orb.detectAndCompute(next_img, self.feature_mask(next_disp))
 
         # TODO config for this

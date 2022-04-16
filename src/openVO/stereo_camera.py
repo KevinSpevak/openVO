@@ -40,9 +40,14 @@ class StereoCamera:
         return img[self.valid_region_right[1]: self.valid_region_right[3],
                    self.valid_region_right[0]: self.valid_region_right[2]]
 
-    def compute_3d(self, img_left, img_right):
-        img_left = self.undistort_rectify_left(cv2.cvtColor(img_left, cv2.COLOR_BGR2GRAY))
-        img_right = self.undistort_rectify_right(cv2.cvtColor(img_right, cv2.COLOR_BGR2GRAY))
+    def compute_3d(self, img_left, img_right, preprocessed=False):
+        if (len(img_left.shape) == 3):
+            img_left = cv2.cvtColor(img_left, cv2.COLOR_BGR2GRAY)
+        if (len(img_right.shape) == 3):
+            img_right = cv2.cvtColor(img_right, cv2.COLOR_BGR2GRAY)
+        if not preprocessed:
+            img_left = self.undistort_rectify_left(img_left)
+            img_right = self.undistort_rectify_right(img_right)
         disparity = self.stereoSGBM.compute(img_left, img_right).astype(np.float32)/16
         img_3d = cv2.reprojectImageTo3D(disparity, self.Q)
         return (self.crop_to_valid_region_left(img_3d),

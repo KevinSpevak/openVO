@@ -12,39 +12,71 @@ class StereoOdometer:
     MAX_ROTATION_CHANGE = np.pi/3 # Radians
 
     def __init__(self, stereo_camera, nfeatures=500, match_threshold=0.8, rigidity_threshold=0, \
-                 outlier_threshold=0, preprocessed_frames=False):
+                 outlier_threshold=0, preprocessed_frames=False, min_matches=10):
         self.stereo = stereo_camera
         # image data for current and previous frames
         self.current_img, self.current_disparity, self.current_3d = None, None, None
         self.prev_img, self.prev_disparity, self.prev_3d = None, None, None
         # orb feature detector and matcher
         # TODO crosscheck
-        # TODO config # features 
         self.orb, self.matcher = cv2.ORB_create(nfeatures=nfeatures), cv2.BFMatcher.create(cv2.NORM_HAMMING)
         # orb key points and descriptors for current and previous frames
         self.prev_kps, self.current_kps = None, None
         self.current_kps, self.current_desc = None, None
         self.match_threshold, self.rigidity_threshold = match_threshold, rigidity_threshold
         self.outlier_threshold, self.preprocessed_frames = outlier_threshold, preprocessed_frames
+        self.min_matches = min_matches
         # Number of successive frames with no coordinate transformation found
         self.skipped_frames = 0
         # transformation of the world frame in the camera's coordinate system
         self.c_T_w = np.eye(4)
+        self.c_T_w_prev = np.eye(4)
 
-        # TODO
         self.skip_cause = ""
 
     # image mask for pixels with acceptable disparity values
     def feature_mask(self, disparity):
-        # TODO config  
+        # TODO config
         mask = (disparity >= self.MIN_VALID_DISPARITY) * (disparity <= self.MAX_VALID_DISPARITY)
         return mask.astype(np.uint8)*255
 
     def valid_distance_change(self, prev_kp_idx, current_kp_idx):
         p_x, p_y = self.prev_kps[prev_kp_idx].pt
         c_x, c_y = self.current_kps[current_kp_idx].pt
+        # TODO if we use this function
         return (np.linalg.norm(self.prev_3d[int(p_y)][int(p_x)])
                 - np.linalg.norm(self.current_3d[int(c_y)][int(c_x)]) <= self.MAX_DISTANCE_CHANGE * (self.skipped_frames + 1))
+
+    def bilinear_interpolate_pixels(self, img, x, y):
+        floor_x, floor_y = int(x), int(y)
+        p10, p01, p11 = None, None, None
+        p00 = img[floor_y, floor_x]
+        h, w = img.shape[0:2]
+        if floor_x + 1 < w:
+            p10 = img[floor_y, floor_x + 1]
+            if floor_y + 1 < h:
+                p11 = img[floor_y + 1, floor_x + 1]
+        if floor_y + 1 < h:
+            p01 = img[floor_y + 1, floor_x]
+        r_x, r_y, num, den = x - floor_x, y - floor_y, 0, 0
+
+        if not np.isinf(p00).any():
+            num += (1 - r_x) * (1 - r_y) * p00
+            den += (1 - r_x) * (1 - r_y)
+            #return p00
+        if not (p01 is None or np.isinf(p01).any()):
+            num += (1 - r_x) * (r_y) * p01
+            den += (1 - r_x) * (r_y)
+            #return p01
+        if not (p10 is None or np.isinf(p10).any()):
+            num += (r_x) * (1 - r_y) * p10
+            den += (r_x) * (1 - r_y)
+            #return p10
+        if not (p11 is None or np.isinf(p11).any()):
+            num += r_x * r_y * p11
+            den += r_x * r_y
+            #return p11
+        return num/den
 
     # Paper alg
     def rigid_body_filter(self, prev_pts, pts):
@@ -84,39 +116,63 @@ class StereoOdometer:
         next_3d, next_disp, next_img = self.stereo.compute_3d(img_left, img_right, preprocessed=self.preprocessed_frames)
         next_kps, next_desc = self.orb.detectAndCompute(next_img, self.feature_mask(next_disp))
 
-        # TODO config for this
-        if len(next_kps) < 10:
+        if len(next_kps) < self.min_matches:
             self.skipped_frames+= 1
             self.skip_cause = "keypoints"
             return False
 
-        if not self.current_img is None:
-            matches = self.matcher.knnMatch(self.current_desc, next_desc, k=2)
+        if self.current_img is None:
+            self.save_frame_update(next_img, next_disp, next_3d, next_kps, next_desc)
+            return True
 
-            matches = [m[0] for m in matches if m[0].distance < self.match_threshold * m[1].distance]
-            if (False): # TODO config
-                matches = [m for m in matches if self.valid_distance_change(m.queryIdx, m.trainIdx)]
+        T = None
+        current_pts, next_pts = self.point_clouds(self.current_kps, next_kps, self.current_desc, \
+                                                  next_desc, self.current_3d, next_3d)
 
-            # TODO config
-            if len(matches) < 10:
-                self.skipped_frames += 1
-                #self.save_frame_update(next_img, next_disp, next_3d, next_kps, next_desc)
-                self.skip_cause = "matches"
-                return False
-
-            # TODO can we get subpix 3d values??
-            next_pts = np.array([next_3d[int(y)][int(x)] for x, y in [next_kps[m.trainIdx].pt for m in matches]])
-            current_pts = np.array([self.current_3d[int(y)][int(x)] for x, y in [self.current_kps[m.queryIdx].pt for m in matches]])
+        if current_pts is None:
+            self.skip_cause = "matches"
+        else:
             T = self.point_cloud_transform(current_pts, next_pts)
-            if T is None:
-                self.skipped_frames += 1
-                #self.save_frame_update(next_img, next_disp, next_3d, next_kps, next_desc)
-                return False
-            else:
+            if not (T is None):
+                self.c_T_w_prev = self.c_T_w
                 self.c_T_w = T @ self.c_T_w
-                self.skipped_frames = 0
-        self.save_frame_update(next_img, next_disp, next_3d, next_kps, next_desc)
+        if T is None and not (self.prev_img is None):
+            prev_pts, next_pts = self.point_clouds(self.prev_kps, next_kps, self.prev_desc, \
+                                                   next_desc, self.prev_3d, next_3d)
+            if prev_pts is None:
+                self.skip_cause = "matches"
+            else:
+                T = self.point_cloud_transform(prev_pts, next_pts)
+                if not (T is None):
+                    T_prev = self.c_T_w_prev
+                    self.c_T_w_prev = self.c_T_w
+                    self.c_T_w = T @ T_prev
+                    self.skipped_frames = 0
+
+        if T is None:
+            self.skipped_frames += 1
+            #self.save_frame_update(next_img, next_disp, next_3d, next_kps, next_desc)
+            return False
+        else:
+            self.skipped_frames = 0
+            self.save_frame_update(next_img, next_disp, next_3d, next_kps, next_desc)
+
         return True
+
+    def point_clouds(self, kps1, kps2, desc1, desc2, im3d1, im3d2):
+        matches = self.matcher.knnMatch(desc1, desc2, k=2)
+        matches = [m[0] for m in matches if m[0].distance < self.match_threshold * m[1].distance]
+        if (False): # TODO config
+            matches = [m for m in matches if self.valid_distance_change(m.queryIdx, m.trainIdx)]
+        if len(matches) < self.min_matches:
+            return None, None
+
+        pts1 = [kps1[m.queryIdx].pt for m in matches]
+        pts2 = [kps2[m.trainIdx].pt for m in matches]
+        for i in range(len(matches)):
+            pts1[i] = self.bilinear_interpolate_pixels(im3d1, pts1[i][0], pts1[i][1])
+            pts2[i] = self.bilinear_interpolate_pixels(im3d2, pts2[i][0], pts2[i][1])
+        return np.array(pts1), np.array(pts2)
 
     def point_cloud_transform(self, current_pts, next_pts):
         if (self.rigidity_threshold > 0):
@@ -140,8 +196,7 @@ class StereoOdometer:
             current_pts = current_pts[errors < threshold]
             next_pts = next_pts[errors < threshold]
 
-        # TODO config
-        if len(current_pts) < 10:
+        if len(current_pts) < self.min_matches:
             if not rigidity_cause:
                 self.skip_cause = "outlier"
             return

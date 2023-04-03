@@ -247,6 +247,7 @@ class OAK_Camera:
                     name="rectified_right", maxSize=1, blocking=False
                 )
 
+            # TODO: handle these concurrently
             while not self._stopped:
                 if video_queue is not None:
                     video_frame = video_queue.get()

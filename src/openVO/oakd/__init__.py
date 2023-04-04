@@ -2,8 +2,8 @@ from typing import Tuple
 
 import numpy as np
 
-from camera import OAK_Camera
-from odometer import OAK_Odometer
+from .camera import OAK_Camera
+from .odometer import OAK_Odometer
 
 __all__ = ["OAK_Camera", "OAK_Odometer"]
 

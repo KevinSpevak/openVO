@@ -87,7 +87,7 @@ class OAK_Camera:
         self._data_lock = Lock()
 
         self._rgb_frame: Optional[np.ndarray] = None
-        self._depth_frame: Optional[np.ndarray] = None
+        self._disparity: Optional[np.ndarray] = None
         self._left_frame: Optional[np.ndarray] = None
         self._right_frame: Optional[np.ndarray] = None
         self._rectified_left_frame: Optional[np.ndarray] = None
@@ -109,7 +109,7 @@ class OAK_Camera:
         """
         Gets the disparity frame
         """
-        return self._depth_frame
+        return self._disparity
 
     @property
     def left_frame(self) -> Optional[np.ndarray]:
@@ -138,6 +138,13 @@ class OAK_Camera:
         Gets the rectified right frame
         """
         return self._rectified_right_frame
+    
+    @property
+    def started(self) -> bool:
+        """
+        Returns true if the camera is started
+        """
+        return self._cam_thread.is_alive()
 
     def start(self) -> None:
         """
@@ -152,12 +159,21 @@ class OAK_Camera:
         self._stopped = True
         self._cam_thread.join()
 
+        # stop the displays 
+        self._display_stopped = True
+        try:
+            self._display_thread.join()
+        except RuntimeError:
+            pass
+        # close displays
+        cv2.destroyAllWindows()
+
     def _display(self) -> None:
         while not self._display_stopped:
             if self._rgb_frame is not None:
                 cv2.imshow("rgb", self._rgb_frame)
-            if self._depth_frame is not None:
-                cv2.imshow("depth", self._depth_frame)
+            if self._disparity is not None:
+                cv2.imshow("depth", self._disparity)
             if self._left_frame is not None:
                 cv2.imshow("left", self._left_frame)
             if self._right_frame is not None:
@@ -248,7 +264,7 @@ class OAK_Camera:
         depth.rectifiedLeft.link(xout_rect_left.input)
         depth.rectifiedRight.link(xout_rect_right.input)
 
-        self._nodes["stereo"] = (depth, xout_depth)
+        self._nodes["disparity"] = (depth, xout_depth)
         self._nodes["mono_left"] = (mono_left, None)
         self._nodes["mono_right"] = (mono_right, None)
         self._nodes["rectified_left"] = (depth, xout_rect_left)
@@ -260,6 +276,8 @@ class OAK_Camera:
         with dai.Device(self._pipeline) as device:
             queues = {}
             for key in self._nodes.keys():
+                if key == "mono_left" or key == "mono_right":
+                    continue
                 if self._nodes[key] is not None:
                     queues[key] = device.getOutputQueue(
                         name=key, maxSize=1, blocking=False
@@ -269,6 +287,8 @@ class OAK_Camera:
             while not self._stopped:
                 with self._data_lock:  # ensures that disparity and left frame are updated together
                     for name, queue in queues.items():
+                        if name == "mono_left" or name == "mono_right":
+                            continue
                         if queue is not None:
                             data = queue.get()
                             if name == "color_camera":
@@ -279,10 +299,10 @@ class OAK_Camera:
                                 self._left_rect_frame = data.getCvFrame()
                             elif name == "rectified_right":
                                 self._right_rect_frame = data.getCvFrame()
-                            elif name == "mono_left":
-                                self._left_frame = data.getCvFrame()
-                            elif name == "mono_right":
-                                self._right_frame = data.getCvFrame()
+                            # elif name == "mono_left":
+                            #     self._left_frame = data.getCvFrame()
+                            # elif name == "mono_right":
+                            #     self._right_frame = data.getCvFrame()
 
     def compute_3d(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """

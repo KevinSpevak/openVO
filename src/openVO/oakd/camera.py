@@ -1,12 +1,20 @@
 from threading import Thread, Lock
-from typing import Dict, Tuple, List, Optional
+from typing import Dict, Tuple, Optional
 
 import depthai as dai
 import numpy as np
+import cv2
 
 
 class OAK_Camera:
-    def __init__(self, rgb_size=(1920, 1080), mono_size=(1280, 720), extended_disparity=True, subpixel=True, lr_check=True):
+    def __init__(
+        self,
+        rgb_size: Tuple[int, int] = (1920, 1080),
+        mono_size: Tuple[int, int] = (1280, 720),
+        extended_disparity: bool = True,
+        subpixel: bool = True,
+        lr_check: bool = True,
+    ):
         self._rgb_width = rgb_size[0]
         self._rgb_height = rgb_size[1]
         self._left_width = mono_size[0]
@@ -21,19 +29,52 @@ class OAK_Camera:
         with dai.Device() as device:
             calibData = device.readCalibration()
 
-            self._M_rgb = np.array(calibData.getCameraIntrinsics(dai.CameraBoardSocket.RGB, self._right_width, self._rgb_height))
-            self._M_left = np.array(calibData.getCameraIntrinsics(dai.CameraBoardSocket.LEFT, self._left_width, self._left_height))
-            self._M_right = np.array(calibData.getCameraIntrinsics(dai.CameraBoardSocket.RIGHT, self._right_width, self._right_height))
-            self._D_left = np.array(calibData.getDistortionCoefficients(dai.CameraBoardSocket.LEFT))
-            self._D_right = np.array(calibData.getDistortionCoefficients(dai.CameraBoardSocket.RIGHT))
+            self._M_rgb = np.array(
+                calibData.getCameraIntrinsics(
+                    dai.CameraBoardSocket.RGB, self._right_width, self._rgb_height
+                )
+            )
+            self._M_left = np.array(
+                calibData.getCameraIntrinsics(
+                    dai.CameraBoardSocket.LEFT, self._left_width, self._left_height
+                )
+            )
+            self._M_right = np.array(
+                calibData.getCameraIntrinsics(
+                    dai.CameraBoardSocket.RIGHT, self._right_width, self._right_height
+                )
+            )
+            self._D_left = np.array(
+                calibData.getDistortionCoefficients(dai.CameraBoardSocket.LEFT)
+            )
+            self._D_right = np.array(
+                calibData.getDistortionCoefficients(dai.CameraBoardSocket.RIGHT)
+            )
             self._rgb_fov = calibData.getFov(dai.CameraBoardSocket.RGB)
             self._mono_fov = calibData.getFov(dai.CameraBoardSocket.LEFT)
 
             self._R1 = np.array(calibData.getStereoLeftRectificationRotation())
             self._R2 = np.array(calibData.getStereoRightRectificationRotation())
 
-            self._H_left = np.matmul(np.matmul(self._M_right, self._R1), np.linalg.inv(self._M_left))
-            self._H_right = np.matmul(np.matmul(self._M_right, self._R1), np.linalg.inv(self._M_right))
+            self._H_left = np.matmul(
+                np.matmul(self._M_right, self._R1), np.linalg.inv(self._M_left)
+            )
+            self._H_right = np.matmul(
+                np.matmul(self._M_right, self._R1), np.linalg.inv(self._M_right)
+            )
+
+            self._baseline = calibData.getBaselineDistance()  # in centimeters
+
+        self._focal_length = self._M_left[0, 0]
+        self._cx, self._cy = self._M_left[0, 2], self._M_left[1, 2]
+        self._Q = np.float32(
+            [
+                [1, 0, 0, -self._cx],
+                [0, 1, 0, -self._cy],
+                [0, 0, 0, self._focal_length],
+                [0, 0, -1.0 / self._baseline, 0],
+            ]
+        )
 
         # pipeline
         self._pipeline: dai.Pipeline = dai.Pipeline()
@@ -43,86 +84,61 @@ class OAK_Camera:
         self._stopped: bool = False
         # thread for the camera
         self._cam_thread = Thread(target=self._target)
+        self._data_lock = Lock()
 
         self._rgb_frame: Optional[np.ndarray] = None
-        self._rgb_frame_lock = Lock()
         self._depth_frame: Optional[np.ndarray] = None
-        self._depth_frame_lock = Lock()
         self._left_frame: Optional[np.ndarray] = None
-        self._left_frame_lock = Lock()
         self._right_frame: Optional[np.ndarray] = None
-        self._right_frame_lock = Lock()
         self._rectified_left_frame: Optional[np.ndarray] = None
-        self._rectified_left_frame_lock = Lock()
         self._rectified_right_frame: Optional[np.ndarray] = None
-        self._rectified_right_frame_lock = Lock()
+
+        # display information
+        self._display_thread = Thread(target=self._display)
+        self._display_stopped = False
 
     @property
     def rgb_frame(self) -> Optional[np.ndarray]:
         """
         Get the rgb color frame
         """
-        self._rgb_frame_lock.acquire()
-        ret_val = self._rgb_frame
-        self._rgb_frame = None
-        self._rgb_frame_lock.release()
-        return ret_val
-    
+        return self._rgb_frame
+
     @property
     def disparity(self) -> Optional[np.ndarray]:
         """
         Gets the disparity frame
         """
-        self._depth_frame_lock.acquire()
-        ret_val = self._depth_frame
-        self._depth_frame = None
-        self._depth_frame_lock.release()
-        return ret_val
-    
+        return self._depth_frame
+
     @property
     def left_frame(self) -> Optional[np.ndarray]:
         """
         Gets the left frame
         """
-        self._left_frame_lock.acquire()
-        ret_val = self._left_frame
-        self._left_frame = None
-        self._left_frame_lock.release()
-        return ret_val
+        return self._left_frame
 
     @property
     def right_frame(self) -> Optional[np.ndarray]:
         """
         Gets the right frame
         """
-        self._right_frame_lock.acquire()
-        ret_val = self._right_frame
-        self._right_frame = None
-        self._right_frame_lock.release()
-        return ret_val
+        return self._right_frame
 
     @property
     def rectified_left_frame(self) -> Optional[np.ndarray]:
         """
         Gets the rectified left frame
         """
-        self._rectified_left_frame_lock.acquire()
-        ret_val = self._rectified_left_frame
-        self._rectified_left_frame = None
-        self._rectified_left_frame_lock.release()
-        return ret_val
+        return self._rectified_left_frame
 
     @property
     def rectified_right_frame(self) -> Optional[np.ndarray]:
         """
         Gets the rectified right frame
         """
-        self._rectified_right_frame_lock.acquire()
-        ret_val = self._rectified_right_frame
-        self._rectified_right_frame = None
-        self._rectified_right_frame_lock.release()
-        return ret_val
-    
+        return self._rectified_right_frame
+
     def start(self) -> None:
         """
         Starts the camera
@@ -136,6 +152,35 @@ class OAK_Camera:
         self._stopped = True
         self._cam_thread.join()
 
+    def _display(self) -> None:
+        while not self._display_stopped:
+            if self._rgb_frame is not None:
+                cv2.imshow("rgb", self._rgb_frame)
+            if self._depth_frame is not None:
+                cv2.imshow("depth", self._depth_frame)
+            if self._left_frame is not None:
+                cv2.imshow("left", self._left_frame)
+            if self._right_frame is not None:
+                cv2.imshow("right", self._right_frame)
+            if self._rectified_left_frame is not None:
+                cv2.imshow("rectified left", self._rectified_left_frame)
+            if self._rectified_right_frame is not None:
+                cv2.imshow("rectified right", self._rectified_right_frame)
+            cv2.waitKey(1)
+
+    def start_display(self) -> None:
+        """
+        Starts the display thread
+        """
+        self._display_thread.start()
+
+    def stop_display(self) -> None:
+        """
+        Stops the display thread
+        """
+        self._display_stopped = True
+        self._display_thread.join()
+
     def _create_cam_rgb(self) -> None:
         cam_rgb = self._pipeline.create(dai.node.ColorCamera)
         xout_video = self._pipeline.create(dai.node.XLinkOut)
@@ -146,8 +191,10 @@ class OAK_Camera:
         elif self._rgb_height == 2160:
             cam_rgb.setResolution(dai.ColorCameraProperties.SensorResolution.THE_4_K)
         else:
-            raise NotImplementedError(f"Resolution not implemented: {self._rgb_width}, {self._rgb_height}")
-        
+            raise NotImplementedError(
+                f"Resolution not implemented: {self._rgb_width}, {self._rgb_height}"
+            )
+
         cam_rgb.setVideoSize(self._rgb_width, self._rgb_height)
         xout_video.input.setBlocking(False)
         xout_video.input.setQueueSize(1)
@@ -211,93 +258,42 @@ class OAK_Camera:
         self._create_cam_rgb()
         self._create_stereo()
         with dai.Device(self._pipeline) as device:
-            video_queue = None
-            if self._nodes["color_camera"] is not None:
-                video_queue = device.getOutputQueue(
-                    name="color_camera", maxSize=1, blocking=False
-                )
-
-            depth_queue = None
-            if self._nodes["stereo"] is not None:
-                depth_queue = device.getOutputQueue(
-                    name="disparity", maxSize=1, blocking=False
-                )
-
-            left_queue = None
-            if self._nodes["mono_left"] is not None:
-                left_queue = device.getOutputQueue(
-                    name="mono_left", maxSize=1, blocking=False
-                )
-            
-            right_queue = None
-            if self._nodes["mono_right"] is not None:
-                right_queue = device.getOutputQueue(
-                    name="mono_right", maxSize=1, blocking=False
-                )
-            
-            left_rect_queue = None
-            if self._nodes["rectified_left"] is not None:
-                left_rect_queue = device.getOutputQueue(
-                    name="rectified_left", maxSize=1, blocking=False
-                )
-            
-            right_rect_queue = None
-            if self._nodes["rectified_right"] is not None:
-                right_rect_queue = device.getOutputQueue(
-                    name="rectified_right", maxSize=1, blocking=False
-                )
+            queues = {}
+            for key in self._nodes.keys():
+                if self._nodes[key] is not None:
+                    queues[key] = device.getOutputQueue(
+                        name=key, maxSize=1, blocking=False
+                    )
 
             # TODO: handle these concurrently
             while not self._stopped:
-                if video_queue is not None:
-                    video_frame = video_queue.get()
-                    rgb_frame = video_frame.getCvFrame()
-
-                    self._rgb_frame_lock.acquire()
-                    self._rgb_frame = rgb_frame
-                    self._rgb_frame_lock.release()
-
-                if depth_queue is not None:
-                    depth_frame = depth_queue.get()
-                    depth_frame = depth_frame.getCvFrame()
-
-                    self._depth_frame_lock.acquire()
-                    self._depth_frame = depth_frame
-                    self._depth_frame_lock.release()
-
-                if left_queue is not None:
-                    left_frame = left_queue.get()
-                    left_frame = left_frame.getCvFrame()
-
-                    self._left_frame_lock.acquire()
-                    self._left_frame = left_frame
-                    self._left_frame_lock.release()
-                
-                if right_queue is not None:
-                    right_frame = right_queue.get()
-                    right_frame = right_frame.getCvFrame()
-
-                    self._right_frame_lock.acquire()
-                    self._right_frame = right_frame
-                    self._right_frame_lock.release()
-                
-                if left_rect_queue is not None:
-                    left_rect_frame = left_rect_queue.get()
-                    left_rect_frame = left_rect_frame.getCvFrame()
-
-                    self._rectified_left_frame_lock.acquire()
-                    self._left_rect_frame = left_rect_frame
-                    self._rectified_left_frame_lock.release()
-                
-                if right_rect_queue is not None:
-                    right_rect_frame = right_rect_queue.get()
-                    right_rect_frame = right_rect_frame.getCvFrame()
-
-                    self._rectified_right_frame_lock.acquire()
-                    self._right_rect_frame = right_rect_frame
-                    self._rectified_right_frame_lock.release()
+                with self._data_lock:  # ensures that disparity and left frame are updated together
+                    for name, queue in queues.items():
+                        if queue is not None:
+                            data = queue.get()
+                            if name == "color_camera":
+                                self._color_frame = data.getCvFrame()
+                            elif name == "disparity":
+                                self._disparity = data.getCvFrame()
+                            elif name == "rectified_left":
+                                self._left_rect_frame = data.getCvFrame()
+                            elif name == "rectified_right":
+                                self._right_rect_frame = data.getCvFrame()
+                            elif name == "mono_left":
+                                self._left_frame = data.getCvFrame()
+                            elif name == "mono_right":
+                                self._right_frame = data.getCvFrame()
 
     def compute_3d(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        return img3d, self.disparity, self.left_frame
-
-cam = OAK_Camera()
+        """
+        Compute 3D point cloud from disparity map.
+        Returns:
+            Tuple[np.ndarray, np.ndarray, np.ndarray]: 3D point cloud, disparity map, left frame
+        """
+        with self._data_lock:  # ensures that disparity and left frame are updated together
+            disparity = self._disparity
+            left_frame = self._rectified_left_frame
+            if disparity is None or left_frame is None:
+                return None, None, None
+        img3d = cv2.reprojectImageTo3D(disparity, self._Q)
+        return img3d, disparity, left_frame

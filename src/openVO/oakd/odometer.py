@@ -1,9 +1,10 @@
 from typing import Optional
+from threading import Thread
 
 import cv2
 import numpy as np
 
-from camera import OAK_Camera
+from .camera import OAK_Camera
 
 
 class OAK_Odometer:
@@ -83,10 +84,41 @@ class OAK_Odometer:
         # skip frames with computed transformation with too large change in rotation
         self._max_rotation_change = max_rotation_change
 
+        # Threading stuff
+        self._stopped = False
+        self._thread = Thread(target=self._run)
+
+    @property
+    def cam(self):
+        """Returns the camera object"""
+        return self._stereo
+
     @property
     def current_pose(self):
         """Returns the current pose of the camera in the world frame"""
         return np.linalg.inv(self._c_T_w)
+    
+    @property
+    def current_img3d(self): 
+        """Returns the current image with 3D points"""
+        return self._current_3d
+
+    def start(self):
+        """
+        Starts the odometer
+        """
+        if not self._stereo.started:
+            self._stereo.start()
+        self._thread.start()
+
+    def stop(self):
+        """
+        Stops the odometer
+        """
+        if self._stereo.started:
+            self._stereo.stop()
+        self._stopped = True
+        self._thread.join()
 
     # image mask for pixels with acceptable disparity values
     def _feature_mask(self, disparity):
@@ -338,3 +370,8 @@ class OAK_Odometer:
                 return
             else:
                 return T
+
+    def _run(self):
+        while not self._stopped:
+            self._update()
+        

@@ -1,20 +1,21 @@
 import numpy as np
 
+
 def rot2RPY(T):
     # Roll : RotX
     # Pitch : RotY
     # Yaw : RotZ
 
-    R = T[0:3,0:3]
+    R = T[0:3, 0:3]
 
-    roll = np.zeros((2, 1)) # psi
-    pitch = np.zeros((2, 1)) # theta
-    yaw = np.zeros((2, 1)) # phi
+    roll = np.zeros((2, 1))  # psi
+    pitch = np.zeros((2, 1))  # theta
+    yaw = np.zeros((2, 1))  # phi
 
-    cos_theta = np.sqrt(R[0][0]**2 + R[1][0]**2)
-    eps = 1E-4
+    cos_theta = np.sqrt(R[0][0] ** 2 + R[1][0] ** 2)
+    eps = 1e-4
 
-    if ((cos_theta < eps) and (cos_theta > -eps)):
+    if (cos_theta < eps) and (cos_theta > -eps):
 
         pitch[0] = -R[2][0] * (np.pi / 2)
         pitch[1] = -R[2][0] * (np.pi / 2)

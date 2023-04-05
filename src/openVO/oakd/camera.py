@@ -18,6 +18,9 @@ class OAK_Camera:
     ):
         self._display_size = display_size
 
+        # TODO: add config for post-processing and other steps
+        # TODO: add config for camera settings
+        
         self._extended_disparity = extended_disparity
         self._subpixel = subpixel
         self._lr_check = lr_check

@@ -1,5 +1,6 @@
 from typing import Optional
 from threading import Thread
+import time
 
 import cv2
 import numpy as np
@@ -97,9 +98,9 @@ class OAK_Odometer:
     def current_pose(self):
         """Returns the current pose of the camera in the world frame"""
         return np.linalg.inv(self._c_T_w)
-    
+
     @property
-    def current_img3d(self): 
+    def current_img3d(self):
         """Returns the current image with 3D points"""
         return self._current_3d
 
@@ -372,6 +373,13 @@ class OAK_Odometer:
                 return T
 
     def _run(self):
+        while True:
+            im3d, disp, left = self._stereo.compute_3d()
+            if im3d is None or disp is None or left is None:
+                time.sleep(0.1)
+                continue
+            else:
+                break
+
         while not self._stopped:
             self._update()
-        

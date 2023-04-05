@@ -309,12 +309,12 @@ class OAK_Odometer:
 
         # Single-pass outlier removal using error from estimated transformation
         if self._outlier_threshold > 0 and len(current_pts) >= 10:
-            T = cv2.estimateAffine3D(
+            T, _ = cv2.estimateAffine3D(
                 current_pts,
                 next_pts,
-                # force_rotation=True,
-                ransacThreshold=self._affine_ransac_threshold,
-                confidence=self._affine_ransac_confidence,
+                force_rotation=True,
+                # ransacThreshold=self._affine_ransac_threshold,
+                # confidence=self._affine_ransac_confidence,
             )
             T = np.vstack([T, [0, 0, 0, 1]])
             h_pts = np.hstack([next_pts, np.array([[1] * len(next_pts)]).transpose()])
@@ -338,12 +338,12 @@ class OAK_Odometer:
                 self._skip_cause = "outlier"
             return
 
-        T = cv2.estimateAffine3D(
+        T, _ = cv2.estimateAffine3D(
             current_pts,
             next_pts,
-            # force_rotation=True,
-            ransacThreshold=self._affine_ransac_threshold,
-            confidence=self._affine_ransac_confidence,
+            force_rotation=True,
+            # ransacThreshold=self._affine_ransac_threshold,
+            # confidence=self._affine_ransac_confidence,
         )
         T = np.vstack([T, [0, 0, 0, 1]])
 
@@ -382,7 +382,4 @@ class OAK_Odometer:
                 break
 
         while not self._stopped:
-            print("UPDATING")
-            print(self._skipped_frames)
             self._update()
-            print(self._skip_cause)

@@ -585,7 +585,6 @@ class OAK_Camera:
                 )
 
     def _crop_to_valid_region(self, img: np.ndarray) -> np.ndarray:
-        print(self._primary_valid_region)
         return img[
             self._primary_valid_region[1] : self._primary_valid_region[3],
             self._primary_valid_region[0] : self._primary_valid_region[2],

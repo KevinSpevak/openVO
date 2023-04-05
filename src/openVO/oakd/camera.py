@@ -1,30 +1,116 @@
-from threading import Thread, Lock
+from threading import Thread
 from typing import List, Tuple, Optional
+import atexit
 
 import depthai as dai
 import numpy as np
 import cv2
-import open3d as o3d
+
+from .projector_3d import PointCloudVisualizer
 
 
 class OAK_Camera:
     def __init__(
         self,
+        rgb_size: str = "1080p",
+        mono_size: str = "400p",
+        primary_mono_left: bool = True,
+        use_cv2_Q: bool = True,
         display_size: Tuple[int, int] = (640, 400),
+        display_rgb: bool = False,
+        display_mono: bool = False,
+        display_depth: bool = False,
+        display_disparity: bool = True,
+        display_rectified: bool = False,
+        display_point_cloud: bool = False,
         extended_disparity: bool = True,
         subpixel: bool = False,
         lr_check: bool = True,
         median_filter: Optional[int] = None,
+        stereo_confidence_threshold: int = 200,
+        stereo_speckle_filter_enable: bool = False,
+        stereo_speckle_filter_range: int = 50,
+        stereo_temporal_filter_enable: bool = True,
+        stereo_spatial_filter_enable: bool = True,
+        stereo_spatial_filter_radius: int = 2,
+        stereo_spatial_filter_num_iterations: int = 1,
+        stereo_threshold_filter_min_range: int = 400,
+        stereo_threshold_filter_max_range: int = 15000,
+        stereo_decimation_filter_factor: int = 1,
     ):
-        self._display_size = display_size
+        self._primary_mono_left = primary_mono_left
+        self._use_cv2_Q = use_cv2_Q
 
-        # TODO: add config for post-processing and other steps
-        # TODO: add config for camera settings
-        # TODO: get camera calibration data again
-        
+        self._display_size = display_size
+        self._display_rgb = display_rgb
+        self._display_mono = display_mono
+        self._display_depth = display_depth
+        self._display_disparity = display_disparity
+        self._display_rectified = display_rectified
+        self._display_point_cloud = display_point_cloud
+
         self._extended_disparity = extended_disparity
         self._subpixel = subpixel
         self._lr_check = lr_check
+
+        self._stereo_confidence_threshold = stereo_confidence_threshold
+        self._stereo_speckle_filter_enable = stereo_speckle_filter_enable
+        self._stereo_speckle_filter_range = stereo_speckle_filter_range
+        self._stereo_temporal_filter_enable = stereo_temporal_filter_enable
+        self._stereo_spatial_filter_enable = stereo_spatial_filter_enable
+        self._stereo_spatial_filter_radius = stereo_spatial_filter_radius
+        self._stereo_spatial_filter_num_iterations = (
+            stereo_spatial_filter_num_iterations
+        )
+        self._stereo_threshold_filter_min_range = stereo_threshold_filter_min_range
+        self._stereo_threshold_filter_max_range = stereo_threshold_filter_max_range
+        self._stereo_decimation_filter_factor = stereo_decimation_filter_factor
+
+        if rgb_size not in ["4k", "1080p"]:
+            raise ValueError('rgb_size must be one of "1080p" or "4k"')
+        else:
+            if rgb_size == "4k":
+                self._rgb_size = (
+                    3840,
+                    2160,
+                    dai.ColorCameraProperties.SensorResolution.THE_4_K,
+                )
+            elif rgb_size == "1080p":
+                self._rgb_size = (
+                    1920,
+                    1080,
+                    dai.ColorCameraProperties.SensorResolution.THE_1080_P,
+                )
+
+        if mono_size not in ["720p", "480p", "400p"]:
+            raise ValueError('mono_size must be one of "720p", "480p", or "400p"')
+        else:
+            if mono_size == "720p":
+                self._mono_size = (
+                    1280,
+                    720,
+                    dai.MonoCameraProperties.SensorResolution.THE_720_P,
+                )
+            elif mono_size == "480p":
+                self._mono_size = (
+                    640,
+                    480,
+                    dai.MonoCameraProperties.SensorResolution.THE_480_P,
+                )
+            elif mono_size == "400p":
+                self._mono_size = (
+                    640,
+                    400,
+                    dai.MonoCameraProperties.SensorResolution.THE_400_P,
+                )
+
+        if self._stereo_decimation_filter_factor == 2:
+            # need to divide the mono height by 2
+            self._mono_size = (
+                self._mono_size[0],
+                self._mono_size[1] // 2,
+                self._mono_size[2],
+            )
 
         if median_filter not in [3, 5, 7] and median_filter is not None:
             raise ValueError("Unsupported median filter size, use 3, 5, 7, or None")
@@ -40,6 +126,138 @@ class OAK_Camera:
                 self._median_filter = dai.StereoDepthProperties.MedianFilter.KERNEL_7x7
             else:
                 self._median_filter = dai.StereoDepthProperties.MedianFilter.MEDIAN_OFF
+
+        with dai.Device() as device:
+            calibData = device.readCalibration()
+
+            self._K_rgb = np.array(
+                calibData.getCameraIntrinsics(
+                    dai.CameraBoardSocket.RGB, self._rgb_size[0], self._rgb_size[1]
+                )
+            )
+            self._focal_rgb = self._K_rgb[0][0]
+            self._cx_rgb = self._K_rgb[0][2]
+            self._cy_rgb = self._K_rgb[1][2]
+            self._K_left = np.array(
+                calibData.getCameraIntrinsics(
+                    dai.CameraBoardSocket.LEFT, self._mono_size[0], self._mono_size[1]
+                )
+            )
+            self._focal_left = self._K_left[0][0]
+            self._cx_left = self._K_left[0][2]
+            self._cy_left = self._K_left[1][2]
+            self._K_right = np.array(
+                calibData.getCameraIntrinsics(
+                    dai.CameraBoardSocket.RIGHT, self._mono_size[0], self._mono_size[1]
+                )
+            )
+            self._focal_right = self._K_right[0][0]
+            self._cx_right = self._K_right[0][2]
+            self._cy_right = self._K_right[1][2]
+            self._D_left = np.array(
+                calibData.getDistortionCoefficients(dai.CameraBoardSocket.LEFT)
+            )
+            self._D_right = np.array(
+                calibData.getDistortionCoefficients(dai.CameraBoardSocket.RIGHT)
+            )
+            self._rgb_fov = calibData.getFov(dai.CameraBoardSocket.RGB)
+            self._mono_fov = calibData.getFov(dai.CameraBoardSocket.LEFT)
+            self._K_primary = self._K_left if self._primary_mono_left else self._K_right
+
+            self._R1 = np.array(calibData.getStereoLeftRectificationRotation())
+            self._R2 = np.array(calibData.getStereoRightRectificationRotation())
+            self._R_primary = self._R1 if self._primary_mono_left else self._R2
+
+            self._T1 = np.array(
+                calibData.getCameraTranslationVector(
+                    srcCamera=dai.CameraBoardSocket.LEFT,
+                    dstCamera=dai.CameraBoardSocket.RIGHT,
+                )
+            )
+            self._T2 = np.array(
+                calibData.getCameraTranslationVector(
+                    srcCamera=dai.CameraBoardSocket.RIGHT,
+                    dstCamera=dai.CameraBoardSocket.LEFT,
+                )
+            )
+            self._T_primary = self._T1 if self._primary_mono_left else self._T2
+
+            self._H_left = np.matmul(
+                np.matmul(self._K_right, self._R1), np.linalg.inv(self._K_left)
+            )
+            self._H_right = np.matmul(
+                np.matmul(self._K_right, self._R1), np.linalg.inv(self._K_right)
+            )
+
+            self._baseline = calibData.getBaselineDistance()  # in centimeters
+
+        self._Q_left = np.array(
+            [
+                1,
+                0,
+                0,
+                -self._cx_left,
+                0,
+                1,
+                0,
+                -self._cy_left,
+                0,
+                0,
+                0,
+                self._focal_left,
+                0,
+                0,
+                -1 / self._baseline,
+                (self._cx_left - self._cy_left) / self._baseline,
+            ]
+        ).reshape(4, 4)
+        self._Q_right = np.array(
+            [
+                1,
+                0,
+                0,
+                -self._cx_right,
+                0,
+                1,
+                0,
+                -self._cy_right,
+                0,
+                0,
+                0,
+                self._focal_right,
+                0,
+                0,
+                -1 / self._baseline,
+                (self._cx_right - self._cy_right) / self._baseline,
+            ]
+        ).reshape(4, 4)
+        self._Q_primary = self._Q_left if self._primary_mono_left else self._Q_right
+
+        # run cv2.stereoRectify
+        (
+            _,
+            _,
+            _,
+            _,
+            Q_primary_new,
+            self._valid_region_left,
+            self._valid_region_right,
+        ) = cv2.stereoRectify(
+            cameraMatrix1=self._K_left,
+            distCoeffs1=self._D_left,
+            cameraMatrix2=self._K_right,
+            distCoeffs2=self._D_right,
+            imageSize=(self._mono_size[0], self._mono_size[1]),
+            R=self._R_primary,
+            T=self._T_primary,
+            flags=cv2.CALIB_ZERO_DISPARITY,
+        )
+        self._primary_valid_region = (
+            self._valid_region_left
+            if self._primary_mono_left
+            else self._valid_region_right
+        )
+        self._Q_primary = Q_primary_new if self._use_cv2_Q else self._Q_primary
 
         # pipeline
         self._pipeline: dai.Pipeline = dai.Pipeline()
@@ -57,13 +275,21 @@ class OAK_Camera:
         self._right_frame: Optional[np.ndarray] = None
         self._left_rect_frame: Optional[np.ndarray] = None
         self._right_rect_frame: Optional[np.ndarray] = None
+        self._im3d: Optional[np.ndarray] = None
+        self._primary_rect_frame: Optional[np.ndarray] = None
 
         # packet for compute_3d
-        self._3d_packet: Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]] = (None, None, None)
+        self._3d_packet: Tuple[
+            Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]
+        ] = (None, None, None)
 
         # display information
         self._display_thread = Thread(target=self._display)
         self._display_stopped = False
+        self._point_cloud_visualizer: Optional[PointCloudVisualizer] = None
+
+        # set atexit methods
+        atexit.register(self.stop)
 
     @property
     def rgb(self) -> Optional[np.ndarray]:
@@ -78,7 +304,7 @@ class OAK_Camera:
         Gets the disparity frame
         """
         return self._disparity
-    
+
     @property
     def depth(self) -> Optional[np.ndarray]:
         """
@@ -115,6 +341,13 @@ class OAK_Camera:
         return self._right_rect_frame
 
     @property
+    def im3d(self) -> Optional[np.ndarray]:
+        """
+        Gets the 3d image
+        """
+        return self._im3d
+
+    @property
     def started(self) -> bool:
         """
         Returns true if the camera is started
@@ -132,7 +365,10 @@ class OAK_Camera:
         Stops the camera
         """
         self._stopped = True
-        self._cam_thread.join()
+        try:
+            self._cam_thread.join()
+        except RuntimeError:
+            pass
 
         # stop the displays
         self._display_stopped = True
@@ -140,6 +376,7 @@ class OAK_Camera:
             self._display_thread.join()
         except RuntimeError:
             pass
+
         # close displays
         cv2.destroyAllWindows()
 
@@ -165,7 +402,18 @@ class OAK_Camera:
                     "rectified right",
                     cv2.resize(self._right_rect_frame, self._display_size),
                 )
+            if self._display_point_cloud:
+                if self._point_cloud_visualizer is None:
+                    self._point_cloud_visualizer = PointCloudVisualizer(
+                        self._K_primary, self._mono_size[0], self._mono_size[1]
+                    )
+                self._point_cloud_visualizer.rgbd_to_projection(
+                    self._depth, self._primary_rect_frame, False
+                )
+                self._point_cloud_visualizer.visualize_pcd()
             cv2.waitKey(50)
+        if self._point_cloud_visualizer is not None:
+            self._point_cloud_visualizer.close_window()
 
     def start_display(self) -> None:
         """
@@ -185,7 +433,7 @@ class OAK_Camera:
         xout_video = self._pipeline.create(dai.node.XLinkOut)
 
         cam.setBoardSocket(dai.CameraBoardSocket.RGB)
-        cam.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1080_P)
+        cam.setResolution(self._rgb_size[2])
         cam.setInterleaved(False)
 
         xout_video.setStreamName("rgb")
@@ -207,14 +455,40 @@ class OAK_Camera:
         left.setBoardSocket(dai.CameraBoardSocket.LEFT)
         right.setBoardSocket(dai.CameraBoardSocket.RIGHT)
         for cam in [left, right]:
-            cam.setResolution(dai.MonoCameraProperties.SensorResolution.THE_400_P)
+            cam.setResolution(self._mono_size[2])
 
-        stereo.initialConfig.setConfidenceThreshold(200)
-        stereo.setRectifyEdgeFillColor(0) 
+        stereo.initialConfig.setConfidenceThreshold(self._stereo_confidence_threshold)
+        stereo.setRectifyEdgeFillColor(0)
         stereo.initialConfig.setMedianFilter(self._median_filter)
         stereo.setLeftRightCheck(self._lr_check)
         stereo.setExtendedDisparity(self._extended_disparity)
         stereo.setSubpixel(self._subpixel)
+
+        config = stereo.initialConfig.get()
+        config.postProcessing.speckleFilter.enable = self._stereo_speckle_filter_enable
+        config.postProcessing.speckleFilter.speckleRange = (
+            self._stereo_speckle_filter_range
+        )
+        config.postProcessing.temporalFilter.enable = (
+            self._stereo_temporal_filter_enable
+        )
+        config.postProcessing.spatialFilter.enable = self._stereo_spatial_filter_enable
+        config.postProcessing.spatialFilter.holeFillingRadius = (
+            self._stereo_spatial_filter_radius
+        )
+        config.postProcessing.spatialFilter.numIterations = (
+            self._stereo_spatial_filter_num_iterations
+        )
+        config.postProcessing.thresholdFilter.minRange = (
+            self._stereo_threshold_filter_min_range
+        )
+        config.postProcessing.thresholdFilter.maxRange = (
+            self._stereo_threshold_filter_max_range
+        )
+        config.postProcessing.decimationFilter.decimationFactor = (
+            self._stereo_decimation_filter_factor
+        )
+        stereo.initialConfig.set(config)
 
         xout_left.setStreamName("left")
         xout_right.setStreamName("right")
@@ -232,7 +506,9 @@ class OAK_Camera:
         stereo.rectifiedLeft.link(xout_rect_left.input)
         stereo.rectifiedRight.link(xout_rect_right.input)
 
-        self._nodes.extend(["left", "right", "depth", "disparity", "rectified_left", "rectified_right"])
+        self._nodes.extend(
+            ["left", "right", "depth", "disparity", "rectified_left", "rectified_right"]
+        )
 
     def _target(self) -> None:
         self._create_cam_rgb()
@@ -262,17 +538,40 @@ class OAK_Camera:
                             self._left_rect_frame = data.getCvFrame()
                         elif name == "rectified_right":
                             self._right_rect_frame = data.getCvFrame()
-                self._3d_packet = (self._depth, self._disparity, self._left_rect_frame)
+                # handle primary mono camera
+                self._primary_rect_frame = (
+                    self._left_rect_frame
+                    if self._primary_mono_left
+                    else self._right_rect_frame
+                )
+                # handle 3d images and odometry packets
+                self._im3d = cv2.reprojectImageTo3D(self._disparity, self._Q_primary)
+                self._3d_packet = (
+                    self._im3d,
+                    self._disparity,
+                    self._primary_rect_frame,
+                )
 
-    def compute_3d(self) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
+    def _crop_to_valid_region(self, img: np.ndarray) -> np.ndarray:
+        print(self._primary_valid_region)
+        return img[
+            self._primary_valid_region[1] : self._primary_valid_region[3],
+            self._primary_valid_region[0] : self._primary_valid_region[2],
+        ]
+
+    def compute_3d(
+        self,
+    ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
         """
-        Compute 3D point cloud from disparity map.
+        Compute 3D points from disparity map.
         Returns:
-            Tuple[np.ndarray, np.ndarray, np.ndarray]: 3D point cloud, disparity map, left frame
+            Tuple[np.ndarray, np.ndarray, np.ndarray]: depth map, disparity map, left frame
         """
-        depth, disparity, left_rect = self._3d_packet
-        if depth is None or disparity is None or left_rect is None:
+        im3d, disparity, rect = self._3d_packet
+        if im3d is None or disparity is None or rect is None:
             return None, None, None
-        im3d = o3d.geometry.PointCloud.create_from_depth_image(depth, o3d.camera.PinholeCameraIntrinsic())
-        im3d = np.asarray(im3d.points)
-        return im3d, disparity, left_rect
+        return (
+            self._crop_to_valid_region(im3d),
+            self._crop_to_valid_region(disparity),
+            self._crop_to_valid_region(rect),
+        )

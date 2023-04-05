@@ -13,13 +13,13 @@ class OAK_Odometer:
         self,
         stereo_camera: Optional[OAK_Camera] = None,
         nfeatures: int = 500,
-        match_threshold: float = 0.8,
+        match_threshold: float = 0.9,
         knn_matches: int = 2,
         filter_matches_distance: bool = False,
-        rigidity_threshold: float = 0,
-        outlier_threshold: float = 0,
+        rigidity_threshold: float = 0.06,
+        outlier_threshold: float = 0.02,
         affine_ransac_threshold: float = 3,
-        affine_ransac_confidence: float = 0.99,
+        affine_ransac_confidence: float = 0.95,
         min_matches: int = 10,
         min_valid_disparity: int = 4,
         max_valid_disparity: int = 100,
@@ -312,7 +312,7 @@ class OAK_Odometer:
             T, _ = cv2.estimateAffine3D(
                 current_pts,
                 next_pts,
-                force_rotation=True,
+                # force_rotation=True,
                 ransacThreshold=self._affine_ransac_threshold,
                 confidence=self._affine_ransac_confidence,
             )
@@ -341,7 +341,7 @@ class OAK_Odometer:
         T, _ = cv2.estimateAffine3D(
             current_pts,
             next_pts,
-            force_rotation=True,
+            # force_rotation=True,
             ransacThreshold=self._affine_ransac_threshold,
             confidence=self._affine_ransac_confidence,
         )
@@ -382,4 +382,7 @@ class OAK_Odometer:
                 break
 
         while not self._stopped:
+            print("UPDATING")
+            print(self._skipped_frames)
             self._update()
+            print(self._skip_cause)

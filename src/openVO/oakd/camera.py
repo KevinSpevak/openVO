@@ -1,9 +1,10 @@
 from threading import Thread, Lock
-from typing import Dict, Tuple, Optional
+from typing import List, Tuple, Optional
 
 import depthai as dai
 import numpy as np
 import cv2
+import open3d as o3d
 
 
 class OAK_Camera:
@@ -13,7 +14,7 @@ class OAK_Camera:
         mono_size: Tuple[int, int] = (1280, 720),
         display_size: Tuple[int, int] = (640, 480),
         extended_disparity: bool = True,
-        subpixel: bool = True,
+        subpixel: bool = False,
         lr_check: bool = True,
         median_filter: Optional[int] = None,
     ):
@@ -24,14 +25,21 @@ class OAK_Camera:
         self._left_height = mono_size[1]
         self._right_height = self._left_height
 
+        self._rgb_size = rgb_size
+        self._mono_size = mono_size
         self._display_size = display_size
 
         self._extended_disparity = extended_disparity
         self._subpixel = subpixel
         self._lr_check = lr_check
 
+        if self._extended_disparity:
+            self._subpixel = False
+
         if median_filter not in [3, 5, 7] and median_filter is not None:
             raise ValueError("Unsupported median filter size, use 3, 5, 7, or None")
+        elif self._extended_disparity or self._subpixel or self._lr_check:
+            self._median_filter = dai.StereoDepthProperties.MedianFilter.MEDIAN_OFF
         else:
             self._median_filter = median_filter
             if self._median_filter == 3:
@@ -46,17 +54,17 @@ class OAK_Camera:
         with dai.Device() as device:
             calibData = device.readCalibration()
 
-            self._M_rgb = np.array(
+            self._K_rgb = np.array(
                 calibData.getCameraIntrinsics(
                     dai.CameraBoardSocket.RGB, self._right_width, self._rgb_height
                 )
             )
-            self._M_left = np.array(
+            self._K_left = np.array(
                 calibData.getCameraIntrinsics(
                     dai.CameraBoardSocket.LEFT, self._left_width, self._left_height
                 )
             )
-            self._M_right = np.array(
+            self._K_right = np.array(
                 calibData.getCameraIntrinsics(
                     dai.CameraBoardSocket.RIGHT, self._right_width, self._right_height
                 )
@@ -73,57 +81,44 @@ class OAK_Camera:
             self._R1 = np.array(calibData.getStereoLeftRectificationRotation())
             self._R2 = np.array(calibData.getStereoRightRectificationRotation())
 
+            self._T1 = np.array(calibData.getCameraTranslationVector(srcCamera=dai.CameraBoardSocket.LEFT, dstCamera=dai.CameraBoardSocket.RIGHT))
+            self._T2 = np.array(calibData.getCameraTranslationVector(srcCamera=dai.CameraBoardSocket.RIGHT, dstCamera=dai.CameraBoardSocket.LEFT))
+
             self._H_left = np.matmul(
-                np.matmul(self._M_right, self._R1), np.linalg.inv(self._M_left)
+                np.matmul(self._K_right, self._R1), np.linalg.inv(self._K_left)
             )
             self._H_right = np.matmul(
-                np.matmul(self._M_right, self._R1), np.linalg.inv(self._M_right)
+                np.matmul(self._K_right, self._R1), np.linalg.inv(self._K_right)
             )
 
             self._baseline = calibData.getBaselineDistance()  # in centimeters
 
-        # run cv2.stereoRectify
-        (
-            self._R1,
-            self._R2,
-            self._P1,
-            self._P2,
-            self._Q,
-            self._valid_region_left,
-            self._valid_region_right,
-        ) = cv2.stereoRectify(
-            self._M_left,
-            self._D_left,
-            self._M_right,
-            self._D_right,
-            (self._left_width, self._left_height),
-            self._R2,
-            self._R1,
-        )
-
         # pipeline
         self._pipeline: dai.Pipeline = dai.Pipeline()
         # storage for the nodes
-        self._nodes: Dict[str, Tuple[dai.Node, dai.XLinkOut]] = {}
+        self._nodes: List[str] = []
         # stop condition
         self._stopped: bool = False
         # thread for the camera
         self._cam_thread = Thread(target=self._target)
-        self._data_lock = Lock()
 
         self._rgb_frame: Optional[np.ndarray] = None
         self._disparity: Optional[np.ndarray] = None
+        self._depth: Optional[np.ndarray] = None
         self._left_frame: Optional[np.ndarray] = None
         self._right_frame: Optional[np.ndarray] = None
         self._left_rect_frame: Optional[np.ndarray] = None
         self._right_rect_frame: Optional[np.ndarray] = None
+
+        # packet for compute_3d
+        self._3d_packet: Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]] = (None, None, None)
 
         # display information
         self._display_thread = Thread(target=self._display)
         self._display_stopped = False
 
     @property
-    def rgb_frame(self) -> Optional[np.ndarray]:
+    def rgb(self) -> Optional[np.ndarray]:
         """
         Get the rgb color frame
         """
@@ -135,16 +130,23 @@ class OAK_Camera:
         Gets the disparity frame
         """
         return self._disparity
+    
+    @property
+    def depth(self) -> Optional[np.ndarray]:
+        """
+        Gets the depth frame
+        """
+        return self._depth
 
     @property
-    def left_frame(self) -> Optional[np.ndarray]:
+    def left(self) -> Optional[np.ndarray]:
         """
         Gets the left frame
         """
         return self._left_frame
 
     @property
-    def right_frame(self) -> Optional[np.ndarray]:
+    def right(self) -> Optional[np.ndarray]:
         """
         Gets the right frame
         """
@@ -198,10 +200,12 @@ class OAK_Camera:
             if self._rgb_frame is not None:
                 cv2.imshow("rgb", cv2.resize(self._rgb_frame, self._display_size))
             if self._disparity is not None:
-                disparity = cv2.normalize(
-                    self._disparity, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U
-                )
-                cv2.imshow("depth", cv2.resize(disparity, self._display_size))
+                # disparity = cv2.normalize(
+                #     self._disparity, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U
+                # )
+                cv2.imshow("disparity", cv2.resize(self._disparity, self._display_size))
+            if self._depth is not None:
+                cv2.imshow("depth", cv2.resize(self._depth, self._display_size))
             if self._left_frame is not None:
                 cv2.imshow("left", cv2.resize(self._left_frame, self._display_size))
             if self._right_frame is not None:
@@ -232,136 +236,95 @@ class OAK_Camera:
         self._display_thread.join()
 
     def _create_cam_rgb(self) -> None:
-        cam_rgb = self._pipeline.create(dai.node.ColorCamera)
+        cam = self._pipeline.create(dai.node.ColorCamera)
         xout_video = self._pipeline.create(dai.node.XLinkOut)
-        xout_video.setStreamName("color_camera")
-        cam_rgb.setBoardSocket(dai.CameraBoardSocket.RGB)
-        if self._rgb_height == 1080:
-            cam_rgb.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1080_P)
-        elif self._rgb_height == 2160:
-            cam_rgb.setResolution(dai.ColorCameraProperties.SensorResolution.THE_4_K)
-        else:
-            raise NotImplementedError(
-                f"Resolution not implemented: {self._rgb_width}, {self._rgb_height}"
-            )
 
-        cam_rgb.setVideoSize(self._rgb_width, self._rgb_height)
-        xout_video.input.setBlocking(False)
-        xout_video.input.setQueueSize(1)
-        cam_rgb.video.link(xout_video.input)
+        cam.setBoardSocket(dai.CameraBoardSocket.RGB)
+        cam.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1080_P)
+        cam.setInterleaved(False)
 
-        self._nodes["color_camera"] = (cam_rgb, xout_video)
+        xout_video.setStreamName("rgb")
+        cam.video.link(xout_video.input)
+
+        self._nodes.append("rgb")
 
     def _create_stereo(self) -> None:
-        # Define sources and outputs
-        mono_left = self._pipeline.create(dai.node.MonoCamera)
-        mono_right = self._pipeline.create(dai.node.MonoCamera)
-        depth = self._pipeline.create(dai.node.StereoDepth)
-
+        left = self._pipeline.create(dai.node.MonoCamera)
+        right = self._pipeline.create(dai.node.MonoCamera)
+        stereo = self._pipeline.create(dai.node.StereoDepth)
+        xout_left = self._pipeline.create(dai.node.XLinkOut)
+        xout_right = self._pipeline.create(dai.node.XLinkOut)
         xout_depth = self._pipeline.create(dai.node.XLinkOut)
-        xout_depth.setStreamName("disparity")
+        xout_disparity = self._pipeline.create(dai.node.XLinkOut)
         xout_rect_left = self._pipeline.create(dai.node.XLinkOut)
-        xout_rect_left.setStreamName("rectified_left")
         xout_rect_right = self._pipeline.create(dai.node.XLinkOut)
+
+        left.setBoardSocket(dai.CameraBoardSocket.LEFT)
+        right.setBoardSocket(dai.CameraBoardSocket.RIGHT)
+        for cam in [left, right]:
+            cam.setResolution(dai.MonoCameraProperties.SensorResolution.THE_400_P)
+
+        stereo.initialConfig.setConfidenceThreshold(200)
+        stereo.setRectifyEdgeFillColor(0) 
+        stereo.initialConfig.setMedianFilter(self._median_filter)
+        stereo.setLeftRightCheck(self._lr_check)
+        stereo.setExtendedDisparity(self._extended_disparity)
+        stereo.setSubpixel(self._subpixel)
+
+        xout_left.setStreamName("left")
+        xout_right.setStreamName("right")
+        xout_depth.setStreamName("depth")
+        xout_disparity.setStreamName("disparity")
+        xout_rect_left.setStreamName("rectified_left")
         xout_rect_right.setStreamName("rectified_right")
 
-        # Properties
-        mono_left.setResolution(dai.MonoCameraProperties.SensorResolution.THE_720_P)
-        mono_left.setBoardSocket(dai.CameraBoardSocket.LEFT)
-        mono_right.setResolution(dai.MonoCameraProperties.SensorResolution.THE_720_P)
-        mono_right.setBoardSocket(dai.CameraBoardSocket.RIGHT)
+        left.out.link(stereo.left)
+        right.out.link(stereo.right)
+        stereo.syncedLeft.link(xout_left.input)
+        stereo.syncedRight.link(xout_right.input)
+        stereo.depth.link(xout_depth.input)
+        stereo.disparity.link(xout_disparity.input)
+        stereo.rectifiedLeft.link(xout_rect_left.input)
+        stereo.rectifiedRight.link(xout_rect_right.input)
 
-        # Create a node that will produce the depth map (using disparity output as it's easier to visualize depth this way)
-        depth.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.HIGH_DENSITY)
-        # Options: MEDIAN_OFF, KERNEL_3x3, KERNEL_5x5, KERNEL_7x7 (default)
-        depth.initialConfig.setMedianFilter(self._median_filter)
-        depth.setLeftRightCheck(self._lr_check)
-        depth.setExtendedDisparity(self._extended_disparity)
-        depth.setSubpixel(self._subpixel)
-
-        config = depth.initialConfig.get()
-        config.postProcessing.speckleFilter.enable = False
-        config.postProcessing.speckleFilter.speckleRange = 50
-        config.postProcessing.temporalFilter.enable = True
-        config.postProcessing.spatialFilter.enable = True
-        config.postProcessing.spatialFilter.holeFillingRadius = 2
-        config.postProcessing.spatialFilter.numIterations = 1
-        config.postProcessing.thresholdFilter.minRange = 400
-        config.postProcessing.thresholdFilter.maxRange = 15000
-        config.postProcessing.decimationFilter.decimationFactor = 2
-        depth.initialConfig.set(config)
-
-        # Linking
-        mono_left.out.link(depth.left)
-        mono_right.out.link(depth.right)
-        depth.disparity.link(xout_depth.input)
-        depth.rectifiedLeft.link(xout_rect_left.input)
-        depth.rectifiedRight.link(xout_rect_right.input)
-
-        self._nodes["disparity"] = (depth, xout_depth)
-        self._nodes["mono_left"] = (mono_left, None)
-        self._nodes["mono_right"] = (mono_right, None)
-        self._nodes["rectified_left"] = (depth, xout_rect_left)
-        self._nodes["rectified_right"] = (depth, xout_rect_right)
+        self._nodes.extend(["left", "right", "depth", "disparity", "rectified_left", "rectified_right"])
 
     def _target(self) -> None:
         self._create_cam_rgb()
         self._create_stereo()
         with dai.Device(self._pipeline) as device:
             queues = {}
-            for key in self._nodes.keys():
-                if key == "mono_left" or key == "mono_right":
-                    continue
-                if self._nodes[key] is not None:
-                    queues[key] = device.getOutputQueue(
-                        name=key, maxSize=1, blocking=False
-                    )
+            for stream in self._nodes:
+                queues[stream] = device.getOutputQueue(
+                    name=stream, maxSize=1, blocking=False
+                )
 
             # TODO: handle these concurrently
+            # TODO: make sure we handle synced frames correctly
             while not self._stopped:
-                with self._data_lock:  # ensures that disparity and left frame are updated together
-                    for name, queue in queues.items():
-                        if name == "mono_left" or name == "mono_right":
-                            continue
-                        if queue is not None:
-                            data = queue.get()
-                            if name == "color_camera":
-                                self._rgb_frame = data.getCvFrame()
-                            elif name == "disparity":
-                                self._disparity = data.getCvFrame()
-                            elif name == "rectified_left":
-                                self._left_rect_frame = data.getCvFrame()
-                            elif name == "rectified_right":
-                                self._right_rect_frame = data.getCvFrame()
+                for name, queue in queues.items():
+                    if queue is not None:
+                        data = queue.get()
+                        if name == "rgb":
+                            self._rgb_frame = data.getCvFrame()
+                        elif name == "left":
+                            self._left_frame = data.getCvFrame()
+                        elif name == "right":
+                            self._right_frame = data.getCvFrame()
+                        elif name == "depth":
+                            self._depth = data.getCvFrame()
+                        elif name == "disparity":
+                            self._disparity = data.getCvFrame()
+                        elif name == "rectified_left":
+                            self._left_rect_frame = data.getCvFrame()
+                        elif name == "rectified_right":
+                            self._right_rect_frame = data.getCvFrame()
+                self._3d_packet = (self._depth, self._disparity, self._left_rect_frame)
 
-    def _crop_to_valid_region_left(self, img):
-        return img[
-            self._valid_region_left[1] : self._valid_region_left[3],
-            self._valid_region_left[0] : self._valid_region_left[2],
-        ]
-
-    def _crop_to_valid_region_right(self, img):
-        return img[
-            self._valid_region_right[1] : self._valid_region_right[3],
-            self._valid_region_right[0] : self._valid_region_right[2],
-        ]
-
-    def compute_3d(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def compute_3d(self) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
         """
         Compute 3D point cloud from disparity map.
         Returns:
             Tuple[np.ndarray, np.ndarray, np.ndarray]: 3D point cloud, disparity map, left frame
         """
-        with self._data_lock:  # ensures that disparity and left frame are updated together
-            disparity = self._disparity
-            left_frame = self._left_rect_frame
-            if disparity is None or left_frame is None:
-                return None, None, None
-        # change type to be compatible with cv2.reprojectImageTo3D()
-        disparity = disparity.astype(np.float32)
-        img3d = cv2.reprojectImageTo3D(disparity, self._Q)
-        return (
-            self._crop_to_valid_region_left(img3d),
-            self._crop_to_valid_region_left(disparity),
-            self._crop_to_valid_region_left(left_frame),
-        )
+        return self._3d_packet

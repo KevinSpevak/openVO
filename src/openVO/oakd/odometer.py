@@ -309,7 +309,7 @@ class OAK_Odometer:
 
         # Single-pass outlier removal using error from estimated transformation
         if self._outlier_threshold > 0 and len(current_pts) >= 10:
-            T, _ = cv2.estimateAffine3D(
+            T = cv2.estimateAffine3D(
                 current_pts,
                 next_pts,
                 # force_rotation=True,
@@ -338,7 +338,7 @@ class OAK_Odometer:
                 self._skip_cause = "outlier"
             return
 
-        T, _ = cv2.estimateAffine3D(
+        T = cv2.estimateAffine3D(
             current_pts,
             next_pts,
             # force_rotation=True,

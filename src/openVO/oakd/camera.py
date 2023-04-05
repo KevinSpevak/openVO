@@ -10,7 +10,7 @@ import open3d as o3d
 class OAK_Camera:
     def __init__(
         self,
-        display_size: Tuple[int, int] = (640, 480),
+        display_size: Tuple[int, int] = (640, 400),
         extended_disparity: bool = True,
         subpixel: bool = False,
         lr_check: bool = True,
@@ -20,6 +20,7 @@ class OAK_Camera:
 
         # TODO: add config for post-processing and other steps
         # TODO: add config for camera settings
+        # TODO: get camera calibration data again
         
         self._extended_disparity = extended_disparity
         self._subpixel = subpixel
@@ -269,4 +270,9 @@ class OAK_Camera:
         Returns:
             Tuple[np.ndarray, np.ndarray, np.ndarray]: 3D point cloud, disparity map, left frame
         """
-        return self._3d_packet
+        depth, disparity, left_rect = self._3d_packet
+        if depth is None or disparity is None or left_rect is None:
+            return None, None, None
+        im3d = o3d.geometry.PointCloud.create_from_depth_image(depth, o3d.camera.PinholeCameraIntrinsic())
+        im3d = np.asarray(im3d.points)
+        return im3d, disparity, left_rect

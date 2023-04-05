@@ -10,31 +10,17 @@ import open3d as o3d
 class OAK_Camera:
     def __init__(
         self,
-        rgb_size: Tuple[int, int] = (1920, 1080),
-        mono_size: Tuple[int, int] = (1280, 720),
         display_size: Tuple[int, int] = (640, 480),
         extended_disparity: bool = True,
         subpixel: bool = False,
         lr_check: bool = True,
         median_filter: Optional[int] = None,
     ):
-        self._rgb_width = rgb_size[0]
-        self._rgb_height = rgb_size[1]
-        self._left_width = mono_size[0]
-        self._right_width = self._left_width
-        self._left_height = mono_size[1]
-        self._right_height = self._left_height
-
-        self._rgb_size = rgb_size
-        self._mono_size = mono_size
         self._display_size = display_size
 
         self._extended_disparity = extended_disparity
         self._subpixel = subpixel
         self._lr_check = lr_check
-
-        if self._extended_disparity:
-            self._subpixel = False
 
         if median_filter not in [3, 5, 7] and median_filter is not None:
             raise ValueError("Unsupported median filter size, use 3, 5, 7, or None")
@@ -50,48 +36,6 @@ class OAK_Camera:
                 self._median_filter = dai.StereoDepthProperties.MedianFilter.KERNEL_7x7
             else:
                 self._median_filter = dai.StereoDepthProperties.MedianFilter.MEDIAN_OFF
-
-        with dai.Device() as device:
-            calibData = device.readCalibration()
-
-            self._K_rgb = np.array(
-                calibData.getCameraIntrinsics(
-                    dai.CameraBoardSocket.RGB, self._right_width, self._rgb_height
-                )
-            )
-            self._K_left = np.array(
-                calibData.getCameraIntrinsics(
-                    dai.CameraBoardSocket.LEFT, self._left_width, self._left_height
-                )
-            )
-            self._K_right = np.array(
-                calibData.getCameraIntrinsics(
-                    dai.CameraBoardSocket.RIGHT, self._right_width, self._right_height
-                )
-            )
-            self._D_left = np.array(
-                calibData.getDistortionCoefficients(dai.CameraBoardSocket.LEFT)
-            )
-            self._D_right = np.array(
-                calibData.getDistortionCoefficients(dai.CameraBoardSocket.RIGHT)
-            )
-            self._rgb_fov = calibData.getFov(dai.CameraBoardSocket.RGB)
-            self._mono_fov = calibData.getFov(dai.CameraBoardSocket.LEFT)
-
-            self._R1 = np.array(calibData.getStereoLeftRectificationRotation())
-            self._R2 = np.array(calibData.getStereoRightRectificationRotation())
-
-            self._T1 = np.array(calibData.getCameraTranslationVector(srcCamera=dai.CameraBoardSocket.LEFT, dstCamera=dai.CameraBoardSocket.RIGHT))
-            self._T2 = np.array(calibData.getCameraTranslationVector(srcCamera=dai.CameraBoardSocket.RIGHT, dstCamera=dai.CameraBoardSocket.LEFT))
-
-            self._H_left = np.matmul(
-                np.matmul(self._K_right, self._R1), np.linalg.inv(self._K_left)
-            )
-            self._H_right = np.matmul(
-                np.matmul(self._K_right, self._R1), np.linalg.inv(self._K_right)
-            )
-
-            self._baseline = calibData.getBaselineDistance()  # in centimeters
 
         # pipeline
         self._pipeline: dai.Pipeline = dai.Pipeline()
@@ -200,9 +144,6 @@ class OAK_Camera:
             if self._rgb_frame is not None:
                 cv2.imshow("rgb", cv2.resize(self._rgb_frame, self._display_size))
             if self._disparity is not None:
-                # disparity = cv2.normalize(
-                #     self._disparity, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U
-                # )
                 cv2.imshow("disparity", cv2.resize(self._disparity, self._display_size))
             if self._depth is not None:
                 cv2.imshow("depth", cv2.resize(self._depth, self._display_size))
@@ -299,8 +240,6 @@ class OAK_Camera:
                     name=stream, maxSize=1, blocking=False
                 )
 
-            # TODO: handle these concurrently
-            # TODO: make sure we handle synced frames correctly
             while not self._stopped:
                 for name, queue in queues.items():
                     if queue is not None:

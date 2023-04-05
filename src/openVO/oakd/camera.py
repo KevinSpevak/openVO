@@ -11,9 +11,11 @@ class OAK_Camera:
         self,
         rgb_size: Tuple[int, int] = (1920, 1080),
         mono_size: Tuple[int, int] = (1280, 720),
+        display_size: Tuple[int, int] = (640, 480),
         extended_disparity: bool = True,
         subpixel: bool = True,
         lr_check: bool = True,
+        median_filter: Optional[int] = None,
     ):
         self._rgb_width = rgb_size[0]
         self._rgb_height = rgb_size[1]
@@ -22,9 +24,24 @@ class OAK_Camera:
         self._left_height = mono_size[1]
         self._right_height = self._left_height
 
+        self._display_size = display_size
+
         self._extended_disparity = extended_disparity
         self._subpixel = subpixel
         self._lr_check = lr_check
+
+        if median_filter not in [3, 5, 7] and median_filter is not None:
+            raise ValueError("Unsupported median filter size, use 3, 5, 7, or None")
+        else:
+            self._median_filter = median_filter
+            if self._median_filter == 3:
+                self._median_filter = dai.StereoDepthProperties.MedianFilter.KERNEL_3x3
+            elif self._median_filter == 5:
+                self._median_filter = dai.StereoDepthProperties.MedianFilter.KERNEL_5x5
+            elif self._median_filter == 7:
+                self._median_filter = dai.StereoDepthProperties.MedianFilter.KERNEL_7x7
+            else:
+                self._median_filter = dai.StereoDepthProperties.MedianFilter.MEDIAN_OFF
 
         with dai.Device() as device:
             calibData = device.readCalibration()
@@ -65,15 +82,23 @@ class OAK_Camera:
 
             self._baseline = calibData.getBaselineDistance()  # in centimeters
 
-        self._focal_length = self._M_left[0, 0]
-        self._cx, self._cy = self._M_left[0, 2], self._M_left[1, 2]
-        self._Q = np.float32(
-            [
-                [1, 0, 0, -self._cx],
-                [0, 1, 0, -self._cy],
-                [0, 0, 0, self._focal_length],
-                [0, 0, -1.0 / self._baseline, 0],
-            ]
+        # run cv2.stereoRectify
+        (
+            self._R1,
+            self._R2,
+            self._P1,
+            self._P2,
+            self._Q,
+            self._valid_region_left,
+            self._valid_region_right,
+        ) = cv2.stereoRectify(
+            self._M_left,
+            self._D_left,
+            self._M_right,
+            self._D_right,
+            (self._left_width, self._left_height),
+            self._R2,
+            self._R1,
         )
 
         # pipeline
@@ -90,8 +115,8 @@ class OAK_Camera:
         self._disparity: Optional[np.ndarray] = None
         self._left_frame: Optional[np.ndarray] = None
         self._right_frame: Optional[np.ndarray] = None
-        self._rectified_left_frame: Optional[np.ndarray] = None
-        self._rectified_right_frame: Optional[np.ndarray] = None
+        self._left_rect_frame: Optional[np.ndarray] = None
+        self._right_rect_frame: Optional[np.ndarray] = None
 
         # display information
         self._display_thread = Thread(target=self._display)
@@ -130,15 +155,15 @@ class OAK_Camera:
         """
         Gets the rectified left frame
         """
-        return self._rectified_left_frame
+        return self._left_rect_frame
 
     @property
     def rectified_right_frame(self) -> Optional[np.ndarray]:
         """
         Gets the rectified right frame
         """
-        return self._rectified_right_frame
-    
+        return self._right_rect_frame
+
     @property
     def started(self) -> bool:
         """
@@ -159,7 +184,7 @@ class OAK_Camera:
         self._stopped = True
         self._cam_thread.join()
 
-        # stop the displays 
+        # stop the displays
         self._display_stopped = True
         try:
             self._display_thread.join()
@@ -171,18 +196,27 @@ class OAK_Camera:
     def _display(self) -> None:
         while not self._display_stopped:
             if self._rgb_frame is not None:
-                cv2.imshow("rgb", self._rgb_frame)
+                cv2.imshow("rgb", cv2.resize(self._rgb_frame, self._display_size))
             if self._disparity is not None:
-                cv2.imshow("depth", self._disparity)
+                disparity = cv2.normalize(
+                    self._disparity, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U
+                )
+                cv2.imshow("depth", cv2.resize(disparity, self._display_size))
             if self._left_frame is not None:
-                cv2.imshow("left", self._left_frame)
+                cv2.imshow("left", cv2.resize(self._left_frame, self._display_size))
             if self._right_frame is not None:
-                cv2.imshow("right", self._right_frame)
-            if self._rectified_left_frame is not None:
-                cv2.imshow("rectified left", self._rectified_left_frame)
-            if self._rectified_right_frame is not None:
-                cv2.imshow("rectified right", self._rectified_right_frame)
-            cv2.waitKey(1)
+                cv2.imshow("right", cv2.resize(self._right_frame, self._display_size))
+            if self._left_rect_frame is not None:
+                cv2.imshow(
+                    "rectified left",
+                    cv2.resize(self._left_rect_frame, self._display_size),
+                )
+            if self._right_rect_frame is not None:
+                cv2.imshow(
+                    "rectified right",
+                    cv2.resize(self._right_rect_frame, self._display_size),
+                )
+            cv2.waitKey(50)
 
     def start_display(self) -> None:
         """
@@ -240,7 +274,7 @@ class OAK_Camera:
         # Create a node that will produce the depth map (using disparity output as it's easier to visualize depth this way)
         depth.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.HIGH_DENSITY)
         # Options: MEDIAN_OFF, KERNEL_3x3, KERNEL_5x5, KERNEL_7x7 (default)
-        depth.initialConfig.setMedianFilter(dai.MedianFilter.KERNEL_7x7)
+        depth.initialConfig.setMedianFilter(self._median_filter)
         depth.setLeftRightCheck(self._lr_check)
         depth.setExtendedDisparity(self._extended_disparity)
         depth.setSubpixel(self._subpixel)
@@ -254,7 +288,7 @@ class OAK_Camera:
         config.postProcessing.spatialFilter.numIterations = 1
         config.postProcessing.thresholdFilter.minRange = 400
         config.postProcessing.thresholdFilter.maxRange = 15000
-        config.postProcessing.decimationFilter.decimationFactor = 1
+        config.postProcessing.decimationFilter.decimationFactor = 2
         depth.initialConfig.set(config)
 
         # Linking
@@ -292,17 +326,25 @@ class OAK_Camera:
                         if queue is not None:
                             data = queue.get()
                             if name == "color_camera":
-                                self._color_frame = data.getCvFrame()
+                                self._rgb_frame = data.getCvFrame()
                             elif name == "disparity":
                                 self._disparity = data.getCvFrame()
                             elif name == "rectified_left":
                                 self._left_rect_frame = data.getCvFrame()
                             elif name == "rectified_right":
                                 self._right_rect_frame = data.getCvFrame()
-                            # elif name == "mono_left":
-                            #     self._left_frame = data.getCvFrame()
-                            # elif name == "mono_right":
-                            #     self._right_frame = data.getCvFrame()
+
+    def _crop_to_valid_region_left(self, img):
+        return img[
+            self._valid_region_left[1] : self._valid_region_left[3],
+            self._valid_region_left[0] : self._valid_region_left[2],
+        ]
+
+    def _crop_to_valid_region_right(self, img):
+        return img[
+            self._valid_region_right[1] : self._valid_region_right[3],
+            self._valid_region_right[0] : self._valid_region_right[2],
+        ]
 
     def compute_3d(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
@@ -312,8 +354,14 @@ class OAK_Camera:
         """
         with self._data_lock:  # ensures that disparity and left frame are updated together
             disparity = self._disparity
-            left_frame = self._rectified_left_frame
+            left_frame = self._left_rect_frame
             if disparity is None or left_frame is None:
                 return None, None, None
+        # change type to be compatible with cv2.reprojectImageTo3D()
+        disparity = disparity.astype(np.float32)
         img3d = cv2.reprojectImageTo3D(disparity, self._Q)
-        return img3d, disparity, left_frame
+        return (
+            self._crop_to_valid_region_left(img3d),
+            self._crop_to_valid_region_left(disparity),
+            self._crop_to_valid_region_left(left_frame),
+        )

@@ -9,7 +9,39 @@ import cv2
 from .projector_3d import PointCloudVisualizer
 
 
+# KNOWN BUGS:
+# - Enabling the speckle filter crashes the camera
+# - Enabling point cloud visualization causes an error and crashes the display thread
 class OAK_Camera:
+    """
+    Class for interfacing with the OAK-D camera.
+    Params:
+        rgb_size: Size of the RGB image. Options are 1080p, 4K
+        mono_size: Size of the monochrome image. Options are 720p, 480p, 400p
+        primary_mono_left: Whether the primary monochrome image is the left image
+        use_cv2_Q: Whether to use the cv2.Q matrix for disparity to depth conversion
+        display_size: Size of the display window
+        display_rgb: Whether to display the RGB image
+        display_mono: Whether to display the monochrome image
+        display_depth: Whether to display the depth image
+        display_disparity: Whether to display the disparity image
+        display_rectified: Whether to display the rectified image
+        display_point_cloud: Whether to display the point cloud
+        extended_disparity: Whether to use extended disparity
+        subpixel: Whether to use subpixel
+        lr_check: Whether to use left-right check
+        median_filter: Whether to use median filter. If so, what size
+        stereo_confidence_threshold: Confidence threshold for stereo matching
+        stereo_speckle_filter_enable: Whether to use speckle filter
+        stereo_speckle_filter_range: Speckle filter range
+        stereo_temporal_filter_enable: Whether to use temporal filter
+        stereo_spatial_filter_enable: Whether to use spatial filter
+        stereo_spatial_filter_radius: Spatial filter radius
+        stereo_spatial_filter_num_iterations: Spatial filter number of iterations
+        stereo_threshold_filter_min_range: Threshold filter minimum range
+        stereo_threshold_filter_max_range: Threshold filter maximum range
+        stereo_decimation_filter_factor: Decimation filter factor. Options are 1, 2
+    """
     def __init__(
         self,
         rgb_size: str = "1080p",

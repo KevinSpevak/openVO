@@ -98,6 +98,11 @@ class OAK_Odometer:
     def current_pose(self):
         """Returns the current pose of the camera in the world frame"""
         return np.linalg.inv(self._c_T_w)
+    
+    @property
+    def skip_cause(self):
+        """Returns the reason for a fram skip (if present)"""
+        return self._skip_cause
 
     @property
     def current_img3d(self):

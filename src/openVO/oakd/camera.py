@@ -411,25 +411,25 @@ class OAK_Camera:
 
         # close displays
         cv2.destroyAllWindows()
-
+        
     def _display(self) -> None:
         while not self._display_stopped:
-            if self._rgb_frame is not None:
+            if self._rgb_frame is not None and self._display_rgb:
                 cv2.imshow("rgb", cv2.resize(self._rgb_frame, self._display_size))
-            if self._disparity is not None:
+            if self._disparity is not None and self._display_disparity:
                 cv2.imshow("disparity", cv2.resize(self._disparity, self._display_size))
-            if self._depth is not None:
+            if self._depth is not None and self._display_depth:
                 cv2.imshow("depth", cv2.resize(self._depth, self._display_size))
-            if self._left_frame is not None:
+            if self._left_frame is not None and self._display_mono:
                 cv2.imshow("left", cv2.resize(self._left_frame, self._display_size))
-            if self._right_frame is not None:
+            if self._right_frame is not None and self._display_mono:
                 cv2.imshow("right", cv2.resize(self._right_frame, self._display_size))
-            if self._left_rect_frame is not None:
+            if self._left_rect_frame is not None and self._display_rectified:
                 cv2.imshow(
                     "rectified left",
                     cv2.resize(self._left_rect_frame, self._display_size),
                 )
-            if self._right_rect_frame is not None:
+            if self._right_rect_frame is not None and self._display_rectified:
                 cv2.imshow(
                     "rectified right",
                     cv2.resize(self._right_rect_frame, self._display_size),

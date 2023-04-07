@@ -1,6 +1,7 @@
-from threading import Thread
+from threading import Thread, Lock
 from typing import List, Tuple, Optional
 import atexit
+import time
 
 import depthai as dai
 import numpy as np
@@ -61,6 +62,7 @@ class OAK_Camera:
         mono_size: str = "400p",
         primary_mono_left: bool = True,
         use_cv2_Q: bool = True,
+        compute_im3d_on_update: bool = False,
         display_size: Tuple[int, int] = (640, 400),
         display_rgb: bool = False,
         display_mono: bool = False,
@@ -71,7 +73,7 @@ class OAK_Camera:
         extended_disparity: bool = True,
         subpixel: bool = False,
         lr_check: bool = True,
-        median_filter: Optional[int] = None,
+        median_filter: Optional[int] = 5,
         stereo_confidence_threshold: int = 200,
         stereo_speckle_filter_enable: bool = False,
         stereo_speckle_filter_range: int = 50,
@@ -320,8 +322,12 @@ class OAK_Camera:
         self._right_frame: Optional[np.ndarray] = None
         self._left_rect_frame: Optional[np.ndarray] = None
         self._right_rect_frame: Optional[np.ndarray] = None
-        self._im3d: Optional[np.ndarray] = None
         self._primary_rect_frame: Optional[np.ndarray] = None
+        
+        self._im3d: Optional[np.ndarray] = None
+        self._compute_im3d_on_update = compute_im3d_on_update
+        self._im3d_lock = Lock()
+        self._im3d_current = False
 
         # packet for compute_3d
         self._3d_packet: Tuple[

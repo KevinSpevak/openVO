@@ -47,8 +47,8 @@ class StereoOdometer:
         self.skipped_frames = 0
         # transformation of the world frame in the camera's coordinate system
         self.c_T_w = np.eye(4)
-        self.c_T_w_prev = np.eye(4)
 
+        # TODO
         self.skip_cause = ""
 
     # image mask for pixels with acceptable disparity values
@@ -155,9 +155,8 @@ class StereoOdometer:
             self.skip_cause = "keypoints"
             return False
 
-        if self.current_img is None:
-            self.save_frame_update(next_img, next_disp, next_3d, next_kps, next_desc)
-            return True
+        if not self.current_img is None:
+            matches = self.matcher.knnMatch(self.current_desc, next_desc, k=2)
 
         T = None
         current_pts, next_pts = self.point_clouds(
@@ -187,6 +186,16 @@ class StereoOdometer:
             )
             if prev_pts is None:
                 self.skip_cause = "matches"
+                return False
+
+            # TODO can we get subpix 3d values??
+            next_pts = np.array([next_3d[int(y)][int(x)] for x, y in [next_kps[m.trainIdx].pt for m in matches]])
+            current_pts = np.array([self.current_3d[int(y)][int(x)] for x, y in [self.current_kps[m.queryIdx].pt for m in matches]])
+            T = self.point_cloud_transform(current_pts, next_pts)
+            if T is None:
+                self.skipped_frames += 1
+                #self.save_frame_update(next_img, next_disp, next_3d, next_kps, next_desc)
+                return False
             else:
                 T = self.point_cloud_transform(prev_pts, next_pts)
                 if not (T is None):
@@ -257,7 +266,8 @@ class StereoOdometer:
             current_pts = current_pts[errors < threshold]
             next_pts = next_pts[errors < threshold]
 
-        if len(current_pts) < self.min_matches:
+        # TODO config
+        if len(current_pts) < 10:
             if not rigidity_cause:
                 self.skip_cause = "outlier"
             return

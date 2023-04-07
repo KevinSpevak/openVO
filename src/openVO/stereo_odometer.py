@@ -12,6 +12,7 @@ class StereoOdometer:
     # skip frames with computed transformation with too large change in rotation
     MAX_ROTATION_CHANGE = np.pi / 3  # Radians
 
+<<<<<<< HEAD
     def __init__(
         self,
         stereo_camera,
@@ -22,12 +23,17 @@ class StereoOdometer:
         preprocessed_frames=False,
         min_matches=10,
     ):
+=======
+    def __init__(self, stereo_camera, nfeatures=500, match_threshold=0.8, rigidity_threshold=0, \
+                 outlier_threshold=0, preprocessed_frames=False, min_matches=10):
+>>>>>>> f974501 (Revert "Revert "Interpolate sub-pixel resolution on 3d image and add fallback to match features 1 frame farther in the past"")
         self.stereo = stereo_camera
         # image data for current and previous frames
         self.current_img, self.current_disparity, self.current_3d = None, None, None
         self.prev_img, self.prev_disparity, self.prev_3d = None, None, None
         # orb feature detector and matcher
         # TODO crosscheck
+<<<<<<< HEAD
         self.orb, self.matcher = cv2.ORB_create(
             nfeatures=nfeatures
         ), cv2.BFMatcher.create(cv2.NORM_HAMMING)
@@ -42,13 +48,21 @@ class StereoOdometer:
             outlier_threshold,
             preprocessed_frames,
         )
+=======
+        self.orb, self.matcher = cv2.ORB_create(nfeatures=nfeatures), cv2.BFMatcher.create(cv2.NORM_HAMMING)
+        # orb key points and descriptors for current and previous frames
+        self.prev_kps, self.current_kps = None, None
+        self.current_kps, self.current_desc = None, None
+        self.match_threshold, self.rigidity_threshold = match_threshold, rigidity_threshold
+        self.outlier_threshold, self.preprocessed_frames = outlier_threshold, preprocessed_frames
+>>>>>>> f974501 (Revert "Revert "Interpolate sub-pixel resolution on 3d image and add fallback to match features 1 frame farther in the past"")
         self.min_matches = min_matches
         # Number of successive frames with no coordinate transformation found
         self.skipped_frames = 0
         # transformation of the world frame in the camera's coordinate system
         self.c_T_w = np.eye(4)
+        self.c_T_w_prev = np.eye(4)
 
-        # TODO
         self.skip_cause = ""
 
     # image mask for pixels with acceptable disparity values
@@ -97,6 +111,37 @@ class StereoOdometer:
             den += r_x * r_y
             # return p11
         return num / den
+
+    def bilinear_interpolate_pixels(self, img, x, y):
+        floor_x, floor_y = int(x), int(y)
+        p10, p01, p11 = None, None, None
+        p00 = img[floor_y, floor_x]
+        h, w = img.shape[0:2]
+        if floor_x + 1 < w:
+            p10 = img[floor_y, floor_x + 1]
+            if floor_y + 1 < h:
+                p11 = img[floor_y + 1, floor_x + 1]
+        if floor_y + 1 < h:
+            p01 = img[floor_y + 1, floor_x]
+        r_x, r_y, num, den = x - floor_x, y - floor_y, 0, 0
+
+        if not np.isinf(p00).any():
+            num += (1 - r_x) * (1 - r_y) * p00
+            den += (1 - r_x) * (1 - r_y)
+            #return p00
+        if not (p01 is None or np.isinf(p01).any()):
+            num += (1 - r_x) * (r_y) * p01
+            den += (1 - r_x) * (r_y)
+            #return p01
+        if not (p10 is None or np.isinf(p10).any()):
+            num += (r_x) * (1 - r_y) * p10
+            den += (r_x) * (1 - r_y)
+            #return p10
+        if not (p11 is None or np.isinf(p11).any()):
+            num += r_x * r_y * p11
+            den += r_x * r_y
+            #return p11
+        return num/den
 
     # Paper alg
     def rigid_body_filter(self, prev_pts, pts):
@@ -155,8 +200,9 @@ class StereoOdometer:
             self.skip_cause = "keypoints"
             return False
 
-        if not self.current_img is None:
-            matches = self.matcher.knnMatch(self.current_desc, next_desc, k=2)
+        if self.current_img is None:
+            self.save_frame_update(next_img, next_disp, next_3d, next_kps, next_desc)
+            return True
 
         T = None
         current_pts, next_pts = self.point_clouds(
@@ -266,8 +312,7 @@ class StereoOdometer:
             current_pts = current_pts[errors < threshold]
             next_pts = next_pts[errors < threshold]
 
-        # TODO config
-        if len(current_pts) < 10:
+        if len(current_pts) < self.min_matches:
             if not rigidity_cause:
                 self.skip_cause = "outlier"
             return

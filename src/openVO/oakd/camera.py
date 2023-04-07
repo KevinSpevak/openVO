@@ -565,6 +565,39 @@ class OAK_Camera:
                     name=stream, maxSize=1, blocking=False
                 )
 
+<<<<<<< HEAD
+=======
+            depth_queue = None
+            if self._nodes["stereo"] is not None:
+                depth_queue = device.getOutputQueue(
+                    name="disparity", maxSize=1, blocking=False
+                )
+
+            left_queue = None
+            if self._nodes["mono_left"] is not None:
+                left_queue = device.getOutputQueue(
+                    name="mono_left", maxSize=1, blocking=False
+                )
+            
+            right_queue = None
+            if self._nodes["mono_right"] is not None:
+                right_queue = device.getOutputQueue(
+                    name="mono_right", maxSize=1, blocking=False
+                )
+            
+            left_rect_queue = None
+            if self._nodes["rectified_left"] is not None:
+                left_rect_queue = device.getOutputQueue(
+                    name="rectified_left", maxSize=1, blocking=False
+                )
+            
+            right_rect_queue = None
+            if self._nodes["rectified_right"] is not None:
+                right_rect_queue = device.getOutputQueue(
+                    name="rectified_right", maxSize=1, blocking=False
+                )
+
+>>>>>>> 5640580 (Revert "TODO")
             while not self._stopped:
                 for name, queue in queues.items():
                     if queue is not None:

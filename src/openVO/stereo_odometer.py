@@ -12,7 +12,6 @@ class StereoOdometer:
     # skip frames with computed transformation with too large change in rotation
     MAX_ROTATION_CHANGE = np.pi / 3  # Radians
 
-<<<<<<< HEAD
     def __init__(
         self,
         stereo_camera,
@@ -23,17 +22,12 @@ class StereoOdometer:
         preprocessed_frames=False,
         min_matches=10,
     ):
-=======
-    def __init__(self, stereo_camera, nfeatures=500, match_threshold=0.8, rigidity_threshold=0, \
-                 outlier_threshold=0, preprocessed_frames=False, min_matches=10):
->>>>>>> f974501 (Revert "Revert "Interpolate sub-pixel resolution on 3d image and add fallback to match features 1 frame farther in the past"")
         self.stereo = stereo_camera
         # image data for current and previous frames
         self.current_img, self.current_disparity, self.current_3d = None, None, None
         self.prev_img, self.prev_disparity, self.prev_3d = None, None, None
         # orb feature detector and matcher
         # TODO crosscheck
-<<<<<<< HEAD
         self.orb, self.matcher = cv2.ORB_create(
             nfeatures=nfeatures
         ), cv2.BFMatcher.create(cv2.NORM_HAMMING)
@@ -48,14 +42,6 @@ class StereoOdometer:
             outlier_threshold,
             preprocessed_frames,
         )
-=======
-        self.orb, self.matcher = cv2.ORB_create(nfeatures=nfeatures), cv2.BFMatcher.create(cv2.NORM_HAMMING)
-        # orb key points and descriptors for current and previous frames
-        self.prev_kps, self.current_kps = None, None
-        self.current_kps, self.current_desc = None, None
-        self.match_threshold, self.rigidity_threshold = match_threshold, rigidity_threshold
-        self.outlier_threshold, self.preprocessed_frames = outlier_threshold, preprocessed_frames
->>>>>>> f974501 (Revert "Revert "Interpolate sub-pixel resolution on 3d image and add fallback to match features 1 frame farther in the past"")
         self.min_matches = min_matches
         # Number of successive frames with no coordinate transformation found
         self.skipped_frames = 0

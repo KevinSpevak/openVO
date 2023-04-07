@@ -66,7 +66,6 @@ class StereoOdometer:
         return np.linalg.norm(self.prev_3d[int(p_y)][int(p_x)]) - np.linalg.norm(
             self.current_3d[int(c_y)][int(c_x)]
         ) <= self.MAX_DISTANCE_CHANGE * (self.skipped_frames + 1)
-<<<<<<< HEAD
 
     def bilinear_interpolate_pixels(self, img, x, y):
         floor_x, floor_y = int(x), int(y)
@@ -98,8 +97,6 @@ class StereoOdometer:
             den += r_x * r_y
             # return p11
         return num / den
-=======
->>>>>>> 9dea733 (Rebased with kevin/main)
 
     def bilinear_interpolate_pixels(self, img, x, y):
         floor_x, floor_y = int(x), int(y)

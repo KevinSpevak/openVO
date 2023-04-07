@@ -1,18 +1,11 @@
 from typing import Optional
-<<<<<<< HEAD
 from threading import Thread
 import time
-=======
->>>>>>> 9dea733 (Rebased with kevin/main)
 
 import cv2
 import numpy as np
 
-<<<<<<< HEAD
 from .camera import OAK_Camera
-=======
-from camera import OAK_Camera
->>>>>>> 9dea733 (Rebased with kevin/main)
 
 
 class OAK_Odometer:
@@ -20,7 +13,6 @@ class OAK_Odometer:
         self,
         stereo_camera: Optional[OAK_Camera] = None,
         nfeatures: int = 500,
-<<<<<<< HEAD
         match_threshold: float = 0.9,
         knn_matches: int = 2,
         filter_matches_distance: bool = False,
@@ -28,15 +20,6 @@ class OAK_Odometer:
         outlier_threshold: float = 0.02,
         affine_ransac_threshold: float = 3,
         affine_ransac_confidence: float = 0.95,
-=======
-        match_threshold: float = 0.8,
-        knn_matches: int = 2,
-        filter_matches_distance: bool = False,
-        rigidity_threshold: float = 0,
-        outlier_threshold: float = 0,
-        affine_ransac_threshold: float = 3,
-        affine_ransac_confidence: float = 0.99,
->>>>>>> 9dea733 (Rebased with kevin/main)
         min_matches: int = 10,
         min_valid_disparity: int = 4,
         max_valid_disparity: int = 100,
@@ -102,7 +85,6 @@ class OAK_Odometer:
         # skip frames with computed transformation with too large change in rotation
         self._max_rotation_change = max_rotation_change
 
-<<<<<<< HEAD
         # Threading stuff
         self._stopped = False
         self._thread = Thread(target=self._run)
@@ -112,13 +94,10 @@ class OAK_Odometer:
         """Returns the camera object"""
         return self._stereo
 
-=======
->>>>>>> 9dea733 (Rebased with kevin/main)
     @property
     def current_pose(self):
         """Returns the current pose of the camera in the world frame"""
         return np.linalg.inv(self._c_T_w)
-<<<<<<< HEAD
     
     @property
     def skip_cause(self):
@@ -146,8 +125,6 @@ class OAK_Odometer:
             self._stereo.stop()
         self._stopped = True
         self._thread.join()
-=======
->>>>>>> 9dea733 (Rebased with kevin/main)
 
     # image mask for pixels with acceptable disparity values
     def _feature_mask(self, disparity):
@@ -341,13 +318,8 @@ class OAK_Odometer:
                 current_pts,
                 next_pts,
                 force_rotation=True,
-<<<<<<< HEAD
                 # ransacThreshold=self._affine_ransac_threshold,
                 # confidence=self._affine_ransac_confidence,
-=======
-                ransacThreshold=self._affine_ransac_threshold,
-                confidence=self._affine_ransac_confidence,
->>>>>>> 9dea733 (Rebased with kevin/main)
             )
             T = np.vstack([T, [0, 0, 0, 1]])
             h_pts = np.hstack([next_pts, np.array([[1] * len(next_pts)]).transpose()])
@@ -375,13 +347,8 @@ class OAK_Odometer:
             current_pts,
             next_pts,
             force_rotation=True,
-<<<<<<< HEAD
             # ransacThreshold=self._affine_ransac_threshold,
             # confidence=self._affine_ransac_confidence,
-=======
-            ransacThreshold=self._affine_ransac_threshold,
-            confidence=self._affine_ransac_confidence,
->>>>>>> 9dea733 (Rebased with kevin/main)
         )
         T = np.vstack([T, [0, 0, 0, 1]])
 
@@ -409,7 +376,6 @@ class OAK_Odometer:
                 return
             else:
                 return T
-<<<<<<< HEAD
 
     def _run(self):
         while True:
@@ -422,5 +388,3 @@ class OAK_Odometer:
 
         while not self._stopped:
             self._update()
-=======
->>>>>>> 9dea733 (Rebased with kevin/main)

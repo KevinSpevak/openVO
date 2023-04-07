@@ -66,6 +66,7 @@ class StereoOdometer:
         return np.linalg.norm(self.prev_3d[int(p_y)][int(p_x)]) - np.linalg.norm(
             self.current_3d[int(c_y)][int(c_x)]
         ) <= self.MAX_DISTANCE_CHANGE * (self.skipped_frames + 1)
+<<<<<<< HEAD
 
     def bilinear_interpolate_pixels(self, img, x, y):
         floor_x, floor_y = int(x), int(y)
@@ -97,6 +98,8 @@ class StereoOdometer:
             den += r_x * r_y
             # return p11
         return num / den
+=======
+>>>>>>> 9dea733 (Rebased with kevin/main)
 
     def bilinear_interpolate_pixels(self, img, x, y):
         floor_x, floor_y = int(x), int(y)
@@ -114,20 +117,20 @@ class StereoOdometer:
         if not np.isinf(p00).any():
             num += (1 - r_x) * (1 - r_y) * p00
             den += (1 - r_x) * (1 - r_y)
-            #return p00
+            # return p00
         if not (p01 is None or np.isinf(p01).any()):
             num += (1 - r_x) * (r_y) * p01
             den += (1 - r_x) * (r_y)
-            #return p01
+            # return p01
         if not (p10 is None or np.isinf(p10).any()):
             num += (r_x) * (1 - r_y) * p10
             den += (r_x) * (1 - r_y)
-            #return p10
+            # return p10
         if not (p11 is None or np.isinf(p11).any()):
             num += r_x * r_y * p11
             den += r_x * r_y
-            #return p11
-        return num/den
+            # return p11
+        return num / den
 
     # Paper alg
     def rigid_body_filter(self, prev_pts, pts):

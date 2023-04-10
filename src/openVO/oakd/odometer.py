@@ -215,7 +215,7 @@ class OAK_Odometer:
 
     def _update(self):
         self._skip_cause = ""
-        next_3d, next_disp, next_img = self._stereo.compute_3d()
+        next_3d, next_disp, next_img = self._stereo.compute_im3d()
         next_kps, next_desc = self._orb.detectAndCompute(
             next_img, self._feature_mask(next_disp)
         )

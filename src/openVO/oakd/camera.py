@@ -1,14 +1,11 @@
-from threading import Thread, Lock, Condition
+from threading import Thread, Condition
 from typing import List, Tuple, Optional
 import atexit
-import time
 
 import depthai as dai
 import numpy as np
 import cv2
 import open3d as o3d
-
-from .projector_3d import PointCloudVisualizer
 
 
 # TODO: Implement all from link
@@ -22,11 +19,11 @@ from .projector_3d import PointCloudVisualizer
 
 # TODO: set fpa rgb and mono cameras
 
+# TODO: implement wait for data method using conditions
 
 
 # KNOWN BUGS:
 # - Enabling the speckle filter crashes the camera
-# - Enabling point cloud visualization causes an error and crashes the display thread
 class OAK_Camera:
     """
     Class for interfacing with the OAK-D camera.
@@ -37,8 +34,8 @@ class OAK_Camera:
         enable_mono: Whether to enable the monochrome camera
         primary_mono_left: Whether the primary monochrome image is the left image
         use_cv2_Q: Whether to use the cv2.Q matrix for disparity to depth conversion
-        compute_im3d_on_update: Whether to compute the IM3D on update
-        compute_point_cloud_on_update: Whether to compute the point cloud on update
+        compute_im3d_on_demand: Whether to compute the IM3D on update
+        compute_point_cloud_on_demand: Whether to compute the point cloud on update
         display_size: Size of the display window
         display_rgb: Whether to display the RGB image
         display_mono: Whether to display the monochrome image
@@ -74,8 +71,8 @@ class OAK_Camera:
         enable_mono: bool = True,
         primary_mono_left: bool = True,
         use_cv2_Q: bool = False,
-        compute_im3d_on_update: bool = False,
-        compute_point_cloud_on_update: bool = False,
+        compute_im3d_on_demand: bool = True,
+        compute_point_cloud_on_demand: bool = True,
         display_size: Tuple[int, int] = (640, 400),
         display_rgb: bool = False,
         display_mono: bool = False,
@@ -100,7 +97,7 @@ class OAK_Camera:
         enable_imu: bool = True,
         imu_batch_report_threshold: int = 20,
         imu_max_batch_reports: int = 20,
-        imu_accelerometer_refresh_rate: int = 500,
+        imu_accelerometer_refresh_rate: int = 400,
         imu_gyroscope_refresh_rate: int = 400,
     ):
         self._enable_rgb = enable_rgb
@@ -363,13 +360,11 @@ class OAK_Camera:
         self._primary_rect_frame: Optional[np.ndarray] = None
         
         self._im3d: Optional[np.ndarray] = None
-        self._compute_im3d_on_update = compute_im3d_on_update
-        self._im3d_lock = Lock()  # TODO, add flag for computing on property call vs. in loop
+        self._compute_im3d_on_demand = compute_im3d_on_demand
         self._im3d_current = False
 
         self._point_cloud: Optional[o3d.geometry.PointCloud] = None
-        self._compute_point_cloud_on_update = compute_point_cloud_on_update
-        self._point_cloud_lock = Lock()  # TODO, add flag for computing on property call vs. in loop
+        self._compute_point_cloud_on_demand = compute_point_cloud_on_demand
         self._point_cloud_current = False
         self._point_cloud_vis = o3d.visualization.Visualizer()
         self._started_point_cloud_vis = False
@@ -391,7 +386,6 @@ class OAK_Camera:
         # display information
         self._display_thread = Thread(target=self._display)
         self._display_stopped = False
-        self._point_cloud_visualizer: Optional[PointCloudVisualizer] = None
 
         # set atexit methods
         atexit.register(self.stop)
@@ -533,7 +527,7 @@ class OAK_Camera:
                     self._point_cloud_vis.create_window()
                     self._point_cloud_vis.add_geometry(self._point_cloud)
                     origin = o3d.geometry.TriangleMesh.create_coordinate_frame(
-                        size=0.5, origin=[0, 0, 0]
+                        size=0.3, origin=[0, 0, 0]
                     )
                     self._point_cloud_vis.add_geometry(origin)
                     self._started_point_cloud_vis = True
@@ -644,8 +638,8 @@ class OAK_Camera:
         imu = self._pipeline.create(dai.node.IMU)
         xout_imu = self._pipeline.create(dai.node.XLinkOut)
 
-        imu.enableIMUSensor(dai.IMUSensor.ACCELEROMETER_RAW, self._imu_accelerometer_refresh_rate)
-        imu.enableIMUSensor(dai.IMUSensor.GYROSCOPE_RAW, self._imu_gyroscope_refresh_rate)
+        imu.enableIMUSensor(dai.IMUSensor.GRAVITY, self._imu_accelerometer_refresh_rate)
+        imu.enableIMUSensor(dai.IMUSensor.GYROSCOPE_CALIBRATED, self._imu_gyroscope_refresh_rate)
         imu.setBatchReportThreshold(self._imu_batch_report_threshold)
         imu.setMaxBatchReports(self._imu_max_batch_reports)
 
@@ -663,16 +657,17 @@ class OAK_Camera:
         rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(
             rgb_o3d, depth_o3d
         )
+
+        pcd = o3d.geometry.PointCloud.create_from_rgbd_image(
+            rgbd_image,
+            self._o3d_pinhole_camera_intrinsic,
+        )
+        pcd = pcd.voxel_down_sample(voxel_size=0.01)
+        pcd = pcd.remove_statistical_outlier(30, 0.1)[0]
+
         if self._point_cloud is None:
-            self._point_cloud = o3d.geometry.PointCloud.create_from_rgbd_image(
-                rgbd_image,
-                self._o3d_pinhole_camera_intrinsic,
-            )
+            self._point_cloud = pcd
         else:
-            pcd = o3d.geometry.PointCloud.create_from_rgbd_image(
-                rgbd_image,
-                self._o3d_pinhole_camera_intrinsic,
-            )
             self._point_cloud.points = pcd.points
             self._point_cloud.colors = pcd.colors
 
@@ -750,14 +745,16 @@ class OAK_Camera:
                     else self._right_rect_frame
                 )
                 # handle 3d images and odometry packets
-                self._im3d = cv2.reprojectImageTo3D(self._disparity, self._Q_primary)
+                if not self._compute_im3d_on_demand:
+                    self._im3d = cv2.reprojectImageTo3D(self._disparity, self._Q_primary)
                 self._3d_packet = (
                     self._im3d,
                     self._disparity,
                     self._primary_rect_frame,
                 )
                 # handle the point cloud
-                self._update_point_cloud()
+                if not self._compute_point_cloud_on_demand:
+                    self._update_point_cloud()
 
     def _crop_to_valid_region(self, img: np.ndarray) -> np.ndarray:
         return img[
@@ -765,7 +762,19 @@ class OAK_Camera:
             self._primary_valid_region[0] : self._primary_valid_region[2],
         ]
 
-    def compute_3d(
+    def compute_point_cloud(self) -> Optional[o3d.geometry.PointCloud]:
+        """
+        Compute point cloud from depth map.
+        Returns:
+            Optional[o3d.geometry.PointCloud]: point cloud
+        """
+        if self._rgb_frame is None and self._depth is None:
+            return None
+        if self._compute_point_cloud_on_demand:
+            self._update_point_cloud()
+        return self._point_cloud
+
+    def compute_im3d(
         self,
     ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
         """
@@ -774,8 +783,11 @@ class OAK_Camera:
             Tuple[np.ndarray, np.ndarray, np.ndarray]: depth map, disparity map, left frame
         """
         im3d, disparity, rect = self._3d_packet
-        if im3d is None or disparity is None or rect is None:
+        if im3d is None and disparity is None and rect is None:
             return None, None, None
+        if self._compute_im3d_on_demand:
+            im3d = cv2.reprojectImageTo3D(disparity, self._Q_primary)
+            self._im3d = im3d
         return (
             self._crop_to_valid_region(im3d),
             self._crop_to_valid_region(disparity),

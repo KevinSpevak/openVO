@@ -17,9 +17,8 @@ class OAK_Odometer:
         knn_matches: int = 2,
         filter_matches_distance: bool = False,
         rigidity_threshold: float = 0.06,
+        rigidity_pts_threshold: int = 10,
         outlier_threshold: float = 0.02,
-        affine_ransac_threshold: float = 3,
-        affine_ransac_confidence: float = 0.95,
         min_matches: int = 10,
         min_valid_disparity: int = 4,
         max_valid_disparity: int = 100,
@@ -54,16 +53,13 @@ class OAK_Odometer:
         ), cv2.BFMatcher.create(cv2.NORM_HAMMING)
         self._knn_matches = knn_matches
         self._filter_matches_distance = filter_matches_distance
-        self._affine_ransac_threshold, self._affine_ransac_confidence = (
-            affine_ransac_threshold,
-            affine_ransac_confidence,
-        )
         # orb key points and descriptors for current and previous frames
         self._prev_kps, self._current_kps = None, None
         self._current_kps, self._current_desc = None, None
-        self._match_threshold, self._rigidity_threshold = (
+        self._match_threshold, self._rigidity_threshold, self._rigidity_pts_threshold = (
             match_threshold,
             rigidity_threshold,
+            rigidity_pts_threshold
         )
         self._outlier_threshold = outlier_threshold
         self._min_matches = min_matches
@@ -218,6 +214,7 @@ class OAK_Odometer:
         self._current_kps, self._current_desc = next_kps, next_desc
 
     def _update(self):
+        self._skip_cause = ""
         next_3d, next_disp, next_img = self._stereo.compute_3d()
         next_kps, next_desc = self._orb.detectAndCompute(
             next_img, self._feature_mask(next_disp)
@@ -308,7 +305,7 @@ class OAK_Odometer:
             next_pts = next_pts[inlier_mask > 0]
 
         rigidity_cause = False
-        if len(current_pts) < 10:
+        if len(current_pts) < self._rigidity_pts_threshold:
             rigidity_cause = True
             self._skip_cause = "rigidity"
 
@@ -318,8 +315,6 @@ class OAK_Odometer:
                 current_pts,
                 next_pts,
                 force_rotation=True,
-                # ransacThreshold=self._affine_ransac_threshold,
-                # confidence=self._affine_ransac_confidence,
             )
             T = np.vstack([T, [0, 0, 0, 1]])
             h_pts = np.hstack([next_pts, np.array([[1] * len(next_pts)]).transpose()])
@@ -347,8 +342,6 @@ class OAK_Odometer:
             current_pts,
             next_pts,
             force_rotation=True,
-            # ransacThreshold=self._affine_ransac_threshold,
-            # confidence=self._affine_ransac_confidence,
         )
         T = np.vstack([T, [0, 0, 0, 1]])
 

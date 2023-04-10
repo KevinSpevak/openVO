@@ -70,7 +70,7 @@ class OAK_Camera:
         mono_size: str = "400p",
         enable_mono: bool = True,
         primary_mono_left: bool = True,
-        use_cv2_Q: bool = True,
+        use_cv2_Q: bool = False,
         compute_im3d_on_update: bool = False,
         display_size: Tuple[int, int] = (640, 400),
         display_rgb: bool = False,
@@ -82,10 +82,10 @@ class OAK_Camera:
         extended_disparity: bool = True,
         subpixel: bool = False,
         lr_check: bool = True,
-        median_filter: Optional[int] = 5,
+        median_filter: Optional[int] = 7,
         stereo_confidence_threshold: int = 200,
         stereo_speckle_filter_enable: bool = False,
-        stereo_speckle_filter_range: int = 50,
+        stereo_speckle_filter_range: int = 60,
         stereo_temporal_filter_enable: bool = True,
         stereo_spatial_filter_enable: bool = True,
         stereo_spatial_filter_radius: int = 2,
@@ -177,10 +177,8 @@ class OAK_Camera:
                 self._mono_size[2],
             )
 
-        if median_filter not in [3, 5, 7] and median_filter is not None:
-            raise ValueError("Unsupported median filter size, use 3, 5, 7, or None")
-        elif self._extended_disparity or self._subpixel or self._lr_check:
-            self._median_filter = dai.StereoDepthProperties.MedianFilter.MEDIAN_OFF
+        if median_filter not in [0, 3, 5, 7] and median_filter is not None:
+            raise ValueError("Unsupported median filter size, use 0, 3, 5, 7, or None")
         else:
             self._median_filter = median_filter
             if self._median_filter == 3:
@@ -260,6 +258,7 @@ class OAK_Camera:
             self._r2l_extrinsic = np.array(
                 calibData.getCameraExtrinsics(srcCamera=dai.CameraBoardSocket.RIGHT, dstCamera=dai.CameraBoardSocket.LEFT)
             )
+            self._primary_extrinsic = self._l2r_extrinsic if self._primary_mono_left else self._r2l_extrinsic
 
             self._baseline = calibData.getBaselineDistance()  # in centimeters
 

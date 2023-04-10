@@ -1,7 +1,32 @@
+from typing import Optional
+import time
+
 import numpy as np
 
+
+def create_covariance_matrices(imu_uncertainty=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], vo_uncertainty=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0]):
+    # Define the state vector and measurement vector sizes
+    state_size = 7  # (x, y, z, q0, q1, q2, q3)
+    measurement_size = 16  # (IMU pose, VO pose)
+
+    # Create the covariance matrices for IMU and VO data
+    imu_covariance = np.zeros((measurement_size, measurement_size))
+    vo_covariance = np.zeros((measurement_size, measurement_size))
+
+    # Fill in the diagonal elements of the covariance matrices
+    for i in range(state_size):
+        imu_covariance[i, i] = imu_uncertainty[i]**2
+        vo_covariance[i + state_size, i + state_size] = vo_uncertainty[i]**2
+
+    return imu_covariance, vo_covariance
+
 class PoseFusion:
-    def __init__(self, imu_covariance, vo_covariance):
+    def __init__(self, imu_covariance: Optional[np.ndarray], vo_covariance: Optional[np.ndarray]):
+        if imu_covariance is None:
+            imu_covariance, _ = create_covariance_matrices()
+        if vo_covariance is None:
+            _, vo_covariance = create_covariance_matrices()
+        
         # Define the state vector and measurement vector sizes
         self.state_size = 7  # (x, y, z, q0, q1, q2, q3)
         self.measurement_size = 16  # (IMU pose, VO pose)
@@ -31,9 +56,12 @@ class PoseFusion:
         # Initialize the state estimate and covariance matrix
         self.x = np.zeros((self.state_size, 1))
         self.P = np.eye(self.state_size)
+
+        # start time
+        self.prev_time: Optional[float] = 0.0
     
     def update(self, imu_pose, imu_velocity, imu_acceleration, vo_pose):
-        # Convert the IMU pose to a quaternion
+         # Convert the IMU pose to a quaternion
         q_imu = imu_pose[:3, :3]
         t_imu = imu_pose[:3, 3]
         q0 = np.sqrt(1 + q_imu[0, 0] + q_imu[1, 1] + q_imu[2, 2]) / 2
@@ -45,10 +73,10 @@ class PoseFusion:
         # Concatenate the IMU and VO poses into a single measurement vector
         measurement = np.vstack((imu_state, vo_pose.reshape((12, 1))))
         
-        # Compute the time interval since the last update (assume fixed time step)
+        # dt = time.perf_counter() - self.prev_time
         dt = 0.01
-
-       # Update the state transition matrix and process noise covariance matrix with the IMU data
+        
+        # Update the state transition matrix and process noise covariance matrix with the IMU data
         omega = imu_velocity.reshape((3, 1))
         a = imu_acceleration.reshape((3, 1))
         wx = np.zeros((3, 3))
@@ -67,7 +95,14 @@ class PoseFusion:
         ax[2, 0] = -a[1, 0]
         ax[2, 1] = a[0, 0]
         self.Q[3:, 3:] = np.dot(ax, ax.T) * dt + np.eye(3) * 0.01
-
+        
+        # Predict the next state estimate and covariance matrix using the state transition matrix and process noise
+        x_prior = np.dot(self.F, self.x)
+        P_prior = np.dot(np.dot(self.F, self.P), self.F.T) + self.Q
+        
+        # Compute the Kalman gain matrix
+        K = np.dot(np.dot(P_prior, self.H.T), np.linalg.inv(np.dot(np.dot(self.H, P_prior), self.H.T) + self.R))
+        
         # Update the state estimate and covariance matrix using the measurement and Kalman gain
         x_post = x_prior + np.dot(K, (measurement - np.dot(self.H, x_prior)))
         P_post = np.dot(np.eye(self.state_size) - np.dot(K, self.H), P_prior)

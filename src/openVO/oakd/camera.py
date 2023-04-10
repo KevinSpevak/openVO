@@ -746,6 +746,7 @@ class OAK_Camera:
                 )
                 # handle 3d images and odometry packets
                 if not self._compute_im3d_on_demand:
+                    # TODO: switch to spatial calculations using depth ai
                     self._im3d = cv2.reprojectImageTo3D(self._disparity, self._Q_primary)
                 self._3d_packet = (
                     self._im3d,
@@ -786,6 +787,8 @@ class OAK_Camera:
         if im3d is None and disparity is None and rect is None:
             return None, None, None
         if self._compute_im3d_on_demand:
+            # disparity = disparity.astype(np.float32)/16
+            # TODO: switch to spatial calculations using depth ai
             im3d = cv2.reprojectImageTo3D(disparity, self._Q_primary)
             self._im3d = im3d
         return (

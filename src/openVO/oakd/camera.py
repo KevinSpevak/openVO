@@ -31,7 +31,9 @@ class OAK_Camera:
     Class for interfacing with the OAK-D camera.
     Params:
         rgb_size: Size of the RGB image. Options are 1080p, 4K
+        enable_rgb: Whether to enable the RGB camera
         mono_size: Size of the monochrome image. Options are 720p, 480p, 400p
+        enable_mono: Whether to enable the monochrome camera
         primary_mono_left: Whether the primary monochrome image is the left image
         use_cv2_Q: Whether to use the cv2.Q matrix for disparity to depth conversion
         display_size: Size of the display window
@@ -55,11 +57,18 @@ class OAK_Camera:
         stereo_threshold_filter_min_range: Threshold filter minimum range
         stereo_threshold_filter_max_range: Threshold filter maximum range
         stereo_decimation_filter_factor: Decimation filter factor. Options are 1, 2
+        enable_imu: Whether to enable the IMU
+        imu_batch_report_threshold: IMU batch report threshold
+        imu_max_batch_reports: IMU maximum report batches
+        imu_accelerometer_refresh_rate: IMU accelerometer refresh rate
+        imu_gyroscope_refresh_rate: IMU gyroscope refresh rate
     """
     def __init__(
         self,
         rgb_size: str = "1080p",
+        enable_rgb: bool = True,
         mono_size: str = "400p",
+        enable_mono: bool = True,
         primary_mono_left: bool = True,
         use_cv2_Q: bool = True,
         compute_im3d_on_update: bool = False,
@@ -84,7 +93,16 @@ class OAK_Camera:
         stereo_threshold_filter_min_range: int = 400,
         stereo_threshold_filter_max_range: int = 15000,
         stereo_decimation_filter_factor: int = 1,
+        enable_imu: bool = True,
+        imu_batch_report_threshold: int = 20,
+        imu_max_batch_reports: int = 20,
+        imu_accelerometer_refresh_rate: int = 500,
+        imu_gyroscope_refresh_rate: int = 400,
     ):
+        self._enable_rgb = enable_rgb
+        self._enable_mono = enable_mono
+        self._enable_imu = enable_imu
+
         self._primary_mono_left = primary_mono_left
         self._use_cv2_Q = use_cv2_Q
 
@@ -236,6 +254,13 @@ class OAK_Camera:
                 np.matmul(self._K_right, self._R1), np.linalg.inv(self._K_right)
             )
 
+            self._l2r_extrinsic = np.array(
+                calibData.getCameraExtrinsics(srcCamera=dai.CameraBoardSocket.LEFT, dstCamera=dai.CameraBoardSocket.RIGHT)
+            )
+            self._r2l_extrinsic = np.array(
+                calibData.getCameraExtrinsics(srcCamera=dai.CameraBoardSocket.RIGHT, dstCamera=dai.CameraBoardSocket.LEFT)
+            )
+
             self._baseline = calibData.getBaselineDistance()  # in centimeters
 
         self._Q_left = np.array(
@@ -329,6 +354,15 @@ class OAK_Camera:
         self._im3d_lock = Lock()
         self._im3d_current = False
 
+        # imu information
+        self._imu_packet: Optional[np.ndarray] = None
+        self._imu_batch_report_threshold: int = imu_batch_report_threshold
+        self._imu_max_batch_reports: int = imu_max_batch_reports
+        self._imu_accelerometer_refresh_rate: float = imu_accelerometer_refresh_rate
+        self._imu_gyroscope_refresh_rate: float = imu_gyroscope_refresh_rate
+        self._imu_pose: List[float] = [0, 0, 0]
+        self._imu_rotation: List[float] = [0, 0, 0]
+
         # packet for compute_3d
         self._3d_packet: Tuple[
             Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]
@@ -397,6 +431,20 @@ class OAK_Camera:
         Gets the 3d image
         """
         return self._im3d
+    
+    @property
+    def imu_pose(self) -> List[float]:
+        """
+        Gets the imu pose (in meters)
+        """
+        return self._imu_pose
+
+    @property
+    def imu_rotation(self) -> List[float]:
+        """
+        Gets the imu rotation (in radians)
+        """
+        return self._imu_rotation
 
     @property
     def started(self) -> bool:
@@ -490,7 +538,7 @@ class OAK_Camera:
         xout_video.setStreamName("rgb")
         cam.video.link(xout_video.input)
 
-        self._nodes.append("rgb")
+        self._nodes.extend(["rgb"])
 
     def _create_stereo(self) -> None:
         left = self._pipeline.create(dai.node.MonoCamera)
@@ -561,9 +609,28 @@ class OAK_Camera:
             ["left", "right", "depth", "disparity", "rectified_left", "rectified_right"]
         )
 
+    def _create_imu(self) -> None:
+        imu = self._pipeline.create(dai.node.IMU)
+        xout_imu = self._pipeline.create(dai.node.XLinkOut)
+
+        imu.enableIMUSensor(dai.IMUSensor.ACCELEROMETER_RAW, self._imu_accelerometer_refresh_rate)
+        imu.enableIMUSensor(dai.IMUSensor.GYROSCOPE_RAW, self._imu_gyroscope_refresh_rate)
+        imu.setBatchReportThreshold(self._imu_batch_report_threshold)
+        imu.setMaxBatchReports(self._imu_max_batch_reports)
+
+        xout_imu.setStreamName("imu")
+
+        imu.out.link(xout_imu.input)
+
+        self._nodes.extend(["imu"])
+
     def _target(self) -> None:
-        self._create_cam_rgb()
-        self._create_stereo()
+        if self._enable_rgb:
+            self._create_cam_rgb()
+        if self._enable_mono:
+            self._create_stereo()
+        if self._enable_imu:
+            self._create_imu()
         with dai.Device(self._pipeline) as device:
             queues = {}
             for stream in self._nodes:
@@ -571,6 +638,8 @@ class OAK_Camera:
                     name=stream, maxSize=1, blocking=False
                 )
 
+            base_accel_timestamp = None
+            base_gyro_timestamp = None
             while not self._stopped:
                 for name, queue in queues.items():
                     if queue is not None:
@@ -589,6 +658,39 @@ class OAK_Camera:
                             self._left_rect_frame = data.getCvFrame()
                         elif name == "rectified_right":
                             self._right_rect_frame = data.getCvFrame()
+                        elif name == "imu":
+                            packets = data.packets
+                            for imuPacket in packets:
+                                acceleroValues = imuPacket.acceleroMeter
+                                gyroValues = imuPacket.gyroscope
+
+                                acclero_ts_device = acceleroValues.getTimestampDevice()
+                                gyro_ts_device = gyroValues.getTimestampDevice()
+
+                                if base_accel_timestamp is None:
+                                    base_accel_timestamp = acclero_ts_device
+                                if base_gyro_timestamp is None:
+                                    base_gyro_timestamp = gyro_ts_device
+
+                                accelero_ts = (acclero_ts_device - base_accel_timestamp).total_seconds()
+                                gyro_ts = (gyro_ts_device - base_gyro_timestamp).total_seconds()
+
+                                ax, ay, az = acceleroValues.x, acceleroValues.y, acceleroValues.z
+                                gx, gy, gz = gyroValues.x, gyroValues.y, gyroValues.z
+
+                                # double integrate each ax, ay, az
+                                self._imu_pose[0] += ax * (accelero_ts ** 2)
+                                self._imu_pose[1] += ay * (accelero_ts ** 2)
+                                self._imu_pose[2] += az * (accelero_ts ** 2)
+
+                                # integrate each gx, gy, gz
+                                self._imu_rotation[0] += gx * gyro_ts
+                                self._imu_rotation[1] += gy * gyro_ts
+                                self._imu_rotation[2] += gz * gyro_ts
+
+                                base_accel_timestamp = acclero_ts_device
+                                base_gyro_timestamp = gyro_ts_device
+
                 # handle primary mono camera
                 self._primary_rect_frame = (
                     self._left_rect_frame

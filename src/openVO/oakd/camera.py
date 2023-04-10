@@ -1,4 +1,4 @@
-from threading import Thread, Lock
+from threading import Thread, Lock, Condition
 from typing import List, Tuple, Optional
 import atexit
 import time
@@ -6,6 +6,7 @@ import time
 import depthai as dai
 import numpy as np
 import cv2
+import open3d as o3d
 
 from .projector_3d import PointCloudVisualizer
 
@@ -36,6 +37,8 @@ class OAK_Camera:
         enable_mono: Whether to enable the monochrome camera
         primary_mono_left: Whether the primary monochrome image is the left image
         use_cv2_Q: Whether to use the cv2.Q matrix for disparity to depth conversion
+        compute_im3d_on_update: Whether to compute the IM3D on update
+        compute_point_cloud_on_update: Whether to compute the point cloud on update
         display_size: Size of the display window
         display_rgb: Whether to display the RGB image
         display_mono: Whether to display the monochrome image
@@ -72,6 +75,7 @@ class OAK_Camera:
         primary_mono_left: bool = True,
         use_cv2_Q: bool = False,
         compute_im3d_on_update: bool = False,
+        compute_point_cloud_on_update: bool = False,
         display_size: Tuple[int, int] = (640, 400),
         display_rgb: bool = False,
         display_mono: bool = False,
@@ -321,6 +325,7 @@ class OAK_Camera:
             imageSize=(self._mono_size[0], self._mono_size[1]),
             R=self._R_primary,
             T=self._T_primary,
+            alpha=0,
             flags=cv2.CALIB_ZERO_DISPARITY,
         )
         self._primary_valid_region = (
@@ -329,6 +334,15 @@ class OAK_Camera:
             else self._valid_region_right
         )
         self._Q_primary = Q_primary_new if self._use_cv2_Q else self._Q_primary
+
+        self._o3d_pinhole_camera_intrinsic = o3d.camera.PinholeCameraIntrinsic(
+            self._mono_size[0],
+            self._mono_size[1],
+            self._K_primary[0][0],
+            self._K_primary[1][1],
+            self._K_primary[0][2],
+            self._K_primary[1][2],
+        )
 
         # pipeline
         self._pipeline: dai.Pipeline = dai.Pipeline()
@@ -350,8 +364,15 @@ class OAK_Camera:
         
         self._im3d: Optional[np.ndarray] = None
         self._compute_im3d_on_update = compute_im3d_on_update
-        self._im3d_lock = Lock()
+        self._im3d_lock = Lock()  # TODO, add flag for computing on property call vs. in loop
         self._im3d_current = False
+
+        self._point_cloud: Optional[o3d.geometry.PointCloud] = None
+        self._compute_point_cloud_on_update = compute_point_cloud_on_update
+        self._point_cloud_lock = Lock()  # TODO, add flag for computing on property call vs. in loop
+        self._point_cloud_current = False
+        self._point_cloud_vis = o3d.visualization.Visualizer()
+        self._started_point_cloud_vis = False
 
         # imu information
         self._imu_packet: Optional[np.ndarray] = None
@@ -432,6 +453,13 @@ class OAK_Camera:
         return self._im3d
     
     @property
+    def point_cloud(self) -> Optional[o3d.geometry.PointCloud]:
+        """
+        Gets the point cloud
+        """
+        return self._point_cloud
+    
+    @property
     def imu_pose(self) -> List[float]:
         """
         Gets the imu pose (in meters)
@@ -500,18 +528,22 @@ class OAK_Camera:
                     "rectified right",
                     cv2.resize(self._right_rect_frame, self._display_size),
                 )
-            if self._display_point_cloud:
-                if self._point_cloud_visualizer is None:
-                    self._point_cloud_visualizer = PointCloudVisualizer(
-                        self._K_primary, self._mono_size[0], self._mono_size[1]
+            if self._point_cloud is not None and self._display_point_cloud:
+                if not self._started_point_cloud_vis:
+                    self._point_cloud_vis.create_window()
+                    self._point_cloud_vis.add_geometry(self._point_cloud)
+                    origin = o3d.geometry.TriangleMesh.create_coordinate_frame(
+                        size=0.5, origin=[0, 0, 0]
                     )
-                self._point_cloud_visualizer.rgbd_to_projection(
-                    self._depth, self._primary_rect_frame, False
-                )
-                self._point_cloud_visualizer.visualize_pcd()
+                    self._point_cloud_vis.add_geometry(origin)
+                    self._started_point_cloud_vis = True
+                else:
+                    self._point_cloud_vis.update_geometry(self._point_cloud)
+                    self._point_cloud_vis.poll_events()
+                    self._point_cloud_vis.update_renderer()
             cv2.waitKey(50)
-        if self._point_cloud_visualizer is not None:
-            self._point_cloud_visualizer.close_window()
+        if self._started_point_cloud_vis:
+            self._point_cloud_vis.destroy_window()
 
     def start_display(self) -> None:
         """
@@ -623,6 +655,27 @@ class OAK_Camera:
 
         self._nodes.extend(["imu"])
 
+    def _update_point_cloud(self) -> None:
+        rgb_frame = cv2.resize(self._rgb_frame, (self._depth.shape[1], self._depth.shape[0]))
+        rgb_o3d = o3d.geometry.Image(rgb_frame)
+        depth_o3d = o3d.geometry.Image(self._depth)
+
+        rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(
+            rgb_o3d, depth_o3d
+        )
+        if self._point_cloud is None:
+            self._point_cloud = o3d.geometry.PointCloud.create_from_rgbd_image(
+                rgbd_image,
+                self._o3d_pinhole_camera_intrinsic,
+            )
+        else:
+            pcd = o3d.geometry.PointCloud.create_from_rgbd_image(
+                rgbd_image,
+                self._o3d_pinhole_camera_intrinsic,
+            )
+            self._point_cloud.points = pcd.points
+            self._point_cloud.colors = pcd.colors
+
     def _target(self) -> None:
         if self._enable_rgb:
             self._create_cam_rgb()
@@ -703,6 +756,8 @@ class OAK_Camera:
                     self._disparity,
                     self._primary_rect_frame,
                 )
+                # handle the point cloud
+                self._update_point_cloud()
 
     def _crop_to_valid_region(self, img: np.ndarray) -> np.ndarray:
         return img[

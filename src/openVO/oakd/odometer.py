@@ -372,7 +372,7 @@ class OAK_Odometer:
 
     def _run(self):
         while True:
-            im3d, disp, left = self._stereo.compute_3d()
+            im3d, disp, left = self._stereo.compute_im3d()
             if im3d is None or disp is None or left is None:
                 time.sleep(0.1)
                 continue

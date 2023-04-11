@@ -98,37 +98,6 @@ class StereoOdometer:
             # return p11
         return num / den
 
-    def bilinear_interpolate_pixels(self, img, x, y):
-        floor_x, floor_y = int(x), int(y)
-        p10, p01, p11 = None, None, None
-        p00 = img[floor_y, floor_x]
-        h, w = img.shape[0:2]
-        if floor_x + 1 < w:
-            p10 = img[floor_y, floor_x + 1]
-            if floor_y + 1 < h:
-                p11 = img[floor_y + 1, floor_x + 1]
-        if floor_y + 1 < h:
-            p01 = img[floor_y + 1, floor_x]
-        r_x, r_y, num, den = x - floor_x, y - floor_y, 0, 0
-
-        if not np.isinf(p00).any():
-            num += (1 - r_x) * (1 - r_y) * p00
-            den += (1 - r_x) * (1 - r_y)
-            # return p00
-        if not (p01 is None or np.isinf(p01).any()):
-            num += (1 - r_x) * (r_y) * p01
-            den += (1 - r_x) * (r_y)
-            # return p01
-        if not (p10 is None or np.isinf(p10).any()):
-            num += (r_x) * (1 - r_y) * p10
-            den += (r_x) * (1 - r_y)
-            # return p10
-        if not (p11 is None or np.isinf(p11).any()):
-            num += r_x * r_y * p11
-            den += r_x * r_y
-            # return p11
-        return num / den
-
     # Paper alg
     def rigid_body_filter(self, prev_pts, pts):
         # d1-d2 where columns of d1 = pts and rows of d2 = pts
@@ -218,16 +187,6 @@ class StereoOdometer:
             )
             if prev_pts is None:
                 self.skip_cause = "matches"
-                return False
-
-            # TODO can we get subpix 3d values??
-            next_pts = np.array([next_3d[int(y)][int(x)] for x, y in [next_kps[m.trainIdx].pt for m in matches]])
-            current_pts = np.array([self.current_3d[int(y)][int(x)] for x, y in [self.current_kps[m.queryIdx].pt for m in matches]])
-            T = self.point_cloud_transform(current_pts, next_pts)
-            if T is None:
-                self.skipped_frames += 1
-                #self.save_frame_update(next_img, next_disp, next_3d, next_kps, next_desc)
-                return False
             else:
                 T = self.point_cloud_transform(prev_pts, next_pts)
                 if not (T is None):

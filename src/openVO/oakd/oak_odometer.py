@@ -16,9 +16,9 @@ class OAK_Odometer:
         self,
         stereo_camera,
         nfeatures=500,
-        match_threshold=0.8,
-        rigidity_threshold=0,
-        outlier_threshold=0,
+        match_threshold=0.9,
+        rigidity_threshold=0.06,
+        outlier_threshold=0.02,
         preprocessed_frames=False,
         min_matches=10,
     ):

@@ -32,7 +32,7 @@ class OAK_Camera:
         enable_rgb: Whether to enable the RGB camera
         mono_size: Size of the monochrome image. Options are 720p, 480p, 400p
         enable_mono: Whether to enable the monochrome camera
-        primary_mono_left: Whether the primary monochrome image is the left image
+        primary_mono_left: Whether the primary monochrome image is the left image or the right image
         use_cv2_Q: Whether to use the cv2.Q matrix for disparity to depth conversion
         compute_im3d_on_demand: Whether to compute the IM3D on update
         compute_point_cloud_on_demand: Whether to compute the point cloud on update
@@ -69,8 +69,10 @@ class OAK_Camera:
         enable_rgb: bool = True,
         mono_size: str = "400p",
         enable_mono: bool = True,
+        rgb_fps: int = 30,
+        mono_fps: int = 30,
         primary_mono_left: bool = True,
-        use_cv2_Q: bool = False,
+        use_cv2_Q: bool = True,
         compute_im3d_on_demand: bool = True,
         compute_point_cloud_on_demand: bool = True,
         display_size: Tuple[int, int] = (640, 400),
@@ -103,6 +105,9 @@ class OAK_Camera:
         self._enable_rgb = enable_rgb
         self._enable_mono = enable_mono
         self._enable_imu = enable_imu
+
+        self._rgb_fps = rgb_fps
+        self._mono_fps = mono_fps
 
         self._primary_mono_left = primary_mono_left
         self._use_cv2_Q = use_cv2_Q
@@ -199,6 +204,9 @@ class OAK_Camera:
                     dai.CameraBoardSocket.RGB, self._rgb_size[0], self._rgb_size[1]
                 )
             )
+            self._D_rgb = np.array(
+                calibData.getDistortionCoefficients(dai.CameraBoardSocket.RGB)
+            )
             self._fx_rgb = self._K_rgb[0][0]
             self._fy_rgb = self._K_rgb[1][1]
             self._cx_rgb = self._K_rgb[0][2]
@@ -239,9 +247,9 @@ class OAK_Camera:
             self._cx_primary = self._cx_left if self._primary_mono_left else self._cx_right
             self._cy_primary = self._cy_left if self._primary_mono_left else self._cy_right
 
-            self._R1 = np.array(calibData.getStereoLeftRectificationRotation())
-            self._R2 = np.array(calibData.getStereoRightRectificationRotation())
-            self._R_primary = self._R1 if self._primary_mono_left else self._R2
+            self._R1_left = np.array(calibData.getStereoLeftRectificationRotation())
+            self._R2_right = np.array(calibData.getStereoRightRectificationRotation())
+            self._R_primary = self._R1_left if self._primary_mono_left else self._R2_right
 
             self._T1 = np.array(
                 calibData.getCameraTranslationVector(
@@ -258,10 +266,10 @@ class OAK_Camera:
             self._T_primary = self._T1 if self._primary_mono_left else self._T2
 
             self._H_left = np.matmul(
-                np.matmul(self._K_right, self._R1), np.linalg.inv(self._K_left)
+                np.matmul(self._K_right, self._R1_left), np.linalg.inv(self._K_left)
             )
             self._H_right = np.matmul(
-                np.matmul(self._K_right, self._R1), np.linalg.inv(self._K_right)
+                np.matmul(self._K_right, self._R1_left), np.linalg.inv(self._K_right)
             )
 
             self._l2r_extrinsic = np.array(
@@ -274,54 +282,37 @@ class OAK_Camera:
 
             self._baseline = calibData.getBaselineDistance()  # in centimeters
 
-        self._Q_left = np.array(
-            [
-                1,
-                0,
-                0,
-                -self._cx_left,
-                0,
-                1,
-                0,
-                -self._cy_left,
-                0,
-                0,
-                0,
-                (self._fx_left + self._fy_left) // 2,
-                0,
-                0,
-                -1 / self._baseline,
-                (self._cx_left - self._cy_left) / self._baseline,
-            ]
-        ).reshape(4, 4)
-        self._Q_right = np.array(
-            [
-                1,
-                0,
-                0,
-                -self._cx_right,
-                0,
-                1,
-                0,
-                -self._cy_right,
-                0,
-                0,
-                0,
-                (self._fx_left + self._fy_left) // 2,
-                0,
-                0,
-                -1 / self._baseline,
-                (self._cx_right - self._cy_right) / self._baseline,
-            ]
-        ).reshape(4, 4)
+        def _create_Q_matrix(fx, fy, cx, cy, baseline):
+            return np.array(
+                [
+                    1,
+                    0,
+                    0,
+                    -cx,
+                    0,
+                    1,
+                    0,
+                    -cy,
+                    0,
+                    0,
+                    0,
+                    (fx + fy) // 2,
+                    0,
+                    0,
+                    -1 / baseline,
+                    (cx - cy) / baseline,
+                ]
+            ).reshape(4, 4)
+        self._Q_left = _create_Q_matrix(self._fx_left, self._fy_left, self._cx_left, self._cy_left, self._baseline)
+        self._Q_right = _create_Q_matrix(self._fx_right, self._fy_right, self._cx_right, self._cy_right, self._baseline)
         self._Q_primary = self._Q_left if self._primary_mono_left else self._Q_right
 
         # run cv2.stereoRectify
         (
-            _,
-            _,
-            _,
-            _,
+            self._R1,
+            self._P1,
+            self._R2,
+            self._P2,
             Q_primary_new,
             self._valid_region_left,
             self._valid_region_right,
@@ -333,8 +324,6 @@ class OAK_Camera:
             imageSize=(self._mono_size[0], self._mono_size[1]),
             R=self._R_primary,
             T=self._T_primary,
-            alpha=0,
-            flags=cv2.CALIB_ZERO_DISPARITY,
         )
         self._primary_valid_region = (
             self._valid_region_left
@@ -342,6 +331,18 @@ class OAK_Camera:
             else self._valid_region_right
         )
         self._Q_primary = Q_primary_new if self._use_cv2_Q else self._Q_primary
+
+        # run cv2.getOptimalNewCameraMatrix
+        self._P_rgb, self._valid_region_rgb = cv2.getOptimalNewCameraMatrix(self._K_rgb, self._D_rgb, (self._rgb_size[0], self._rgb_size[1]), 1, (self._rgb_size[0], self._rgb_size[1]))
+        self._map_rgb_1, self._map_rgb_2 = cv2.initUndistortRectifyMap(
+            self._K_rgb, self._D_rgb, None, self._P_rgb, (self._rgb_size[0], self._rgb_size[1]), cv2.CV_16SC2
+        )
+        self._map_left_1, self._map_left_2 = cv2.initUndistortRectifyMap(
+            self._K_left, self._D_left, self._R1, self._P1, (self._mono_size[0], self._mono_size[1]), cv2.CV_16SC2
+        )
+        self._map_right_1, self._map_right_2 = cv2.initUndistortRectifyMap(
+            self._K_right, self._D_right, self._R2, self._P2, (self._mono_size[0], self._mono_size[1]), cv2.CV_16SC2
+        )
 
         self._o3d_pinhole_camera_intrinsic = o3d.camera.PinholeCameraIntrinsic(
             self._mono_size[0],
@@ -362,6 +363,7 @@ class OAK_Camera:
         self._cam_thread = Thread(target=self._target)
 
         self._rgb_frame: Optional[np.ndarray] = None
+        self._rectified_rgb_frame: Optional[np.ndarray] = None
         self._disparity: Optional[np.ndarray] = None
         self._depth: Optional[np.ndarray] = None
         self._left_frame: Optional[np.ndarray] = None
@@ -410,6 +412,13 @@ class OAK_Camera:
         Get the rgb color frame
         """
         return self._rgb_frame
+    
+    @property
+    def rectified_rgb(self) -> Optional[np.ndarray]:
+        """
+        Get the rectified rgb color frame
+        """
+        return self._rectified_rgb_frame
 
     @property
     def disparity(self) -> Optional[np.ndarray]:
@@ -588,6 +597,7 @@ class OAK_Camera:
         cam.setBoardSocket(dai.CameraBoardSocket.RGB)
         cam.setResolution(self._rgb_size[2])
         cam.setInterleaved(False)
+        cam.setFps(self._rgb_fps)
 
         xout_video.setStreamName("rgb")
         cam.video.link(xout_video.input)
@@ -598,7 +608,7 @@ class OAK_Camera:
         left = self._pipeline.create(dai.node.MonoCamera)
         right = self._pipeline.create(dai.node.MonoCamera)
         stereo = self._pipeline.create(dai.node.StereoDepth)
-        stereo.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.HIGH_DENSITY)
+        stereo.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.HIGH_ACCURACY)
         xout_left = self._pipeline.create(dai.node.XLinkOut)
         xout_right = self._pipeline.create(dai.node.XLinkOut)
         xout_depth = self._pipeline.create(dai.node.XLinkOut)
@@ -609,6 +619,7 @@ class OAK_Camera:
         left.setBoardSocket(dai.CameraBoardSocket.LEFT)
         right.setBoardSocket(dai.CameraBoardSocket.RIGHT)
         for cam in [left, right]:
+            cam.setFps(self._mono_fps)
             cam.setResolution(self._mono_size[2])
 
         stereo.initialConfig.setConfidenceThreshold(self._stereo_confidence_threshold)
@@ -740,6 +751,7 @@ class OAK_Camera:
                         data = queue.get()
                         if name == "rgb":
                             self._rgb_frame = data.getCvFrame()
+                            self._rectified_rgb_frame = cv2.remap(self._rgb_frame, self._map_rgb_1, self._map_rgb_2, cv2.INTER_LINEAR)
                         elif name == "left":
                             self._left_frame = data.getCvFrame()
                         elif name == "right":
@@ -806,7 +818,7 @@ class OAK_Camera:
                 with self._data_condition:
                     self._data_condition.notify_all()
 
-    def _crop_to_valid_region(self, img: np.ndarray) -> np.ndarray:
+    def _crop_to_valid_primary_region(self, img: np.ndarray) -> np.ndarray:
         return img[
             self._primary_valid_region[1] : self._primary_valid_region[3],
             self._primary_valid_region[0] : self._primary_valid_region[2],
@@ -839,7 +851,7 @@ class OAK_Camera:
             self._update_im3d()
             im3d = self._im3d
         return (
-            self._crop_to_valid_region(im3d),
-            self._crop_to_valid_region(disparity),
-            self._crop_to_valid_region(rect),
+            self._crop_to_valid_primary_region(im3d),
+            self._crop_to_valid_primary_region(disparity),
+            self._crop_to_valid_primary_region(rect),
         )

@@ -63,6 +63,7 @@ class OAK_Camera:
         imu_accelerometer_refresh_rate: IMU accelerometer refresh rate
         imu_gyroscope_refresh_rate: IMU gyroscope refresh rate
     """
+
     def __init__(
         self,
         rgb_size: str = "1080p",
@@ -234,10 +235,18 @@ class OAK_Camera:
             self._mono_fov = calibData.getFov(dai.CameraBoardSocket.LEFT)
 
             self._K_primary = self._K_left if self._primary_mono_left else self._K_right
-            self._fx_primary = self._fx_left if self._primary_mono_left else self._fx_right
-            self._fy_primary = self._fy_left if self._primary_mono_left else self._fy_right
-            self._cx_primary = self._cx_left if self._primary_mono_left else self._cx_right
-            self._cy_primary = self._cy_left if self._primary_mono_left else self._cy_right
+            self._fx_primary = (
+                self._fx_left if self._primary_mono_left else self._fx_right
+            )
+            self._fy_primary = (
+                self._fy_left if self._primary_mono_left else self._fy_right
+            )
+            self._cx_primary = (
+                self._cx_left if self._primary_mono_left else self._cx_right
+            )
+            self._cy_primary = (
+                self._cy_left if self._primary_mono_left else self._cy_right
+            )
 
             self._R1 = np.array(calibData.getStereoLeftRectificationRotation())
             self._R2 = np.array(calibData.getStereoRightRectificationRotation())
@@ -265,12 +274,20 @@ class OAK_Camera:
             )
 
             self._l2r_extrinsic = np.array(
-                calibData.getCameraExtrinsics(srcCamera=dai.CameraBoardSocket.LEFT, dstCamera=dai.CameraBoardSocket.RIGHT)
+                calibData.getCameraExtrinsics(
+                    srcCamera=dai.CameraBoardSocket.LEFT,
+                    dstCamera=dai.CameraBoardSocket.RIGHT,
+                )
             )
             self._r2l_extrinsic = np.array(
-                calibData.getCameraExtrinsics(srcCamera=dai.CameraBoardSocket.RIGHT, dstCamera=dai.CameraBoardSocket.LEFT)
+                calibData.getCameraExtrinsics(
+                    srcCamera=dai.CameraBoardSocket.RIGHT,
+                    dstCamera=dai.CameraBoardSocket.LEFT,
+                )
             )
-            self._primary_extrinsic = self._l2r_extrinsic if self._primary_mono_left else self._r2l_extrinsic
+            self._primary_extrinsic = (
+                self._l2r_extrinsic if self._primary_mono_left else self._r2l_extrinsic
+            )
 
             self._baseline = calibData.getBaselineDistance()  # in centimeters
 
@@ -369,7 +386,7 @@ class OAK_Camera:
         self._left_rect_frame: Optional[np.ndarray] = None
         self._right_rect_frame: Optional[np.ndarray] = None
         self._primary_rect_frame: Optional[np.ndarray] = None
-        
+
         self._im3d: Optional[np.ndarray] = None
         self._compute_im3d_on_demand = compute_im3d_on_demand
         self._im3d_current = False
@@ -459,14 +476,14 @@ class OAK_Camera:
         Gets the 3d image
         """
         return self._im3d
-    
+
     @property
     def point_cloud(self) -> Optional[o3d.geometry.PointCloud]:
         """
         Gets the point cloud
         """
         return self._point_cloud
-    
+
     @property
     def imu_pose(self) -> List[float]:
         """
@@ -522,7 +539,7 @@ class OAK_Camera:
         """
         with self._data_condition:
             self._data_condition.wait()
-        
+
     def _display(self) -> None:
         with self._data_condition:
             self._data_condition.wait()
@@ -530,7 +547,9 @@ class OAK_Camera:
             if self._rgb_frame is not None and self._display_rgb:
                 cv2.imshow("rgb", cv2.resize(self._rgb_frame, self._display_size))
             if self._disparity is not None and self._display_disparity:
-                frame = (self._disparity * (255 / self._stereo_confidence_threshold)).astype(np.uint8)
+                frame = (
+                    self._disparity * (255 / self._stereo_confidence_threshold)
+                ).astype(np.uint8)
                 frame = cv2.resize(frame, self._display_size)
                 cv2.imshow("disparity-gray", frame)
                 frame = cv2.applyColorMap(frame, cv2.COLORMAP_JET)
@@ -669,7 +688,9 @@ class OAK_Camera:
         xout_imu = self._pipeline.create(dai.node.XLinkOut)
 
         imu.enableIMUSensor(dai.IMUSensor.GRAVITY, self._imu_accelerometer_refresh_rate)
-        imu.enableIMUSensor(dai.IMUSensor.GYROSCOPE_CALIBRATED, self._imu_gyroscope_refresh_rate)
+        imu.enableIMUSensor(
+            dai.IMUSensor.GYROSCOPE_CALIBRATED, self._imu_gyroscope_refresh_rate
+        )
         imu.setBatchReportThreshold(self._imu_batch_report_threshold)
         imu.setMaxBatchReports(self._imu_max_batch_reports)
 
@@ -680,7 +701,9 @@ class OAK_Camera:
         self._nodes.extend(["imu"])
 
     def _update_point_cloud(self) -> None:
-        rgb_frame = cv2.resize(self._rgb_frame, (self._depth.shape[1], self._depth.shape[0]))
+        rgb_frame = cv2.resize(
+            self._rgb_frame, (self._depth.shape[1], self._depth.shape[0])
+        )
         rgb_o3d = o3d.geometry.Image(rgb_frame)
         depth_o3d = o3d.geometry.Image(self._depth)
 
@@ -766,10 +789,18 @@ class OAK_Camera:
                                 if base_gyro_timestamp is None:
                                     base_gyro_timestamp = gyro_ts_device
 
-                                accelero_ts = (acclero_ts_device - base_accel_timestamp).total_seconds()
-                                gyro_ts = (gyro_ts_device - base_gyro_timestamp).total_seconds()
+                                accelero_ts = (
+                                    acclero_ts_device - base_accel_timestamp
+                                ).total_seconds()
+                                gyro_ts = (
+                                    gyro_ts_device - base_gyro_timestamp
+                                ).total_seconds()
 
-                                ax, ay, az = acceleroValues.x, acceleroValues.y, acceleroValues.z
+                                ax, ay, az = (
+                                    acceleroValues.x,
+                                    acceleroValues.y,
+                                    acceleroValues.z,
+                                )
                                 gx, gy, gz = gyroValues.x, gyroValues.y, gyroValues.z
 
                                 # double integrate each ax, ay, az
@@ -802,7 +833,7 @@ class OAK_Camera:
                 # handle the point cloud
                 if not self._compute_point_cloud_on_demand:
                     self._update_point_cloud()
-                
+
                 with self._data_condition:
                     self._data_condition.notify_all()
 

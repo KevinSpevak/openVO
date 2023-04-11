@@ -56,11 +56,11 @@ class OAK_Odometer:
         # orb key points and descriptors for current and previous frames
         self._prev_kps, self._current_kps = None, None
         self._current_kps, self._current_desc = None, None
-        self._match_threshold, self._rigidity_threshold, self._rigidity_pts_threshold = (
-            match_threshold,
-            rigidity_threshold,
-            rigidity_pts_threshold
-        )
+        (
+            self._match_threshold,
+            self._rigidity_threshold,
+            self._rigidity_pts_threshold,
+        ) = (match_threshold, rigidity_threshold, rigidity_pts_threshold)
         self._outlier_threshold = outlier_threshold
         self._min_matches = min_matches
         # Number of successive frames with no coordinate transformation found
@@ -94,7 +94,7 @@ class OAK_Odometer:
     def current_pose(self):
         """Returns the current pose of the camera in the world frame"""
         return np.linalg.inv(self._c_T_w)
-    
+
     @property
     def skip_cause(self):
         """Returns the reason for a fram skip (if present)"""

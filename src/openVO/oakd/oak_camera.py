@@ -890,12 +890,15 @@ class OAK_Camera:
             self._primary_valid_region[0] : self._primary_valid_region[2],
         ]
 
-    def compute_point_cloud(self) -> Optional[o3d.geometry.PointCloud]:
+    def compute_point_cloud(self, block=True) -> Optional[o3d.geometry.PointCloud]:
         """
         Compute point cloud from depth map.
         Returns:
             Optional[o3d.geometry.PointCloud]: point cloud
         """
+        if block:
+            with self._data_condition:
+                self._data_condition.wait()
         if self._rgb_frame is None and self._depth is None:
             return None
         if self._compute_point_cloud_on_demand:
@@ -903,13 +906,16 @@ class OAK_Camera:
         return self._point_cloud
 
     def compute_im3d(
-        self,
+        self, block=True
     ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
         """
         Compute 3D points from disparity map.
         Returns:
             Tuple[np.ndarray, np.ndarray, np.ndarray]: depth map, disparity map, left frame
         """
+        if block:
+            with self._data_condition:
+                self._data_condition.wait()
         im3d, disparity, rect = self._3d_packet
         if im3d is None and disparity is None and rect is None:
             return None, None, None

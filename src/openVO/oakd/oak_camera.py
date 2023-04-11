@@ -33,7 +33,7 @@ class OAK_Camera:
         mono_size: Size of the monochrome image. Options are 720p, 480p, 400p
         enable_mono: Whether to enable the monochrome camera
         primary_mono_left: Whether the primary monochrome image is the left image or the right image
-        use_cv2_Q: Whether to use the cv2.Q matrix for disparity to depth conversion
+        use_cv2_Q_matrix: Whether to use the cv2.Q matrix for disparity to depth conversion
         compute_im3d_on_demand: Whether to compute the IM3D on update
         compute_point_cloud_on_demand: Whether to compute the point cloud on update
         display_size: Size of the display window
@@ -73,7 +73,7 @@ class OAK_Camera:
         rgb_fps: int = 30,
         mono_fps: int = 30,
         primary_mono_left: bool = True,
-        use_cv2_Q: bool = True,
+        use_cv2_Q_matrix: bool = True,
         compute_im3d_on_demand: bool = True,
         compute_point_cloud_on_demand: bool = True,
         display_size: Tuple[int, int] = (640, 400),
@@ -111,7 +111,7 @@ class OAK_Camera:
         self._mono_fps = mono_fps
 
         self._primary_mono_left = primary_mono_left
-        self._use_cv2_Q = use_cv2_Q
+        self._use_cv2_Q_matrix = use_cv2_Q_matrix
 
         self._display_size = display_size
         self._display_rgb = display_rgb
@@ -256,9 +256,9 @@ class OAK_Camera:
                 self._cy_left if self._primary_mono_left else self._cy_right
             )
 
-            self._R1_left = np.array(calibData.getStereoLeftRectificationRotation())
-            self._R2_right = np.array(calibData.getStereoRightRectificationRotation())
-            self._R_primary = self._R1_left if self._primary_mono_left else self._R2_right
+            self._R1 = np.array(calibData.getStereoLeftRectificationRotation())
+            self._R2 = np.array(calibData.getStereoRightRectificationRotation())
+            self._R_primary = self._R1 if self._primary_mono_left else self._R2
 
             self._T1 = np.array(
                 calibData.getCameraTranslationVector(
@@ -275,10 +275,10 @@ class OAK_Camera:
             self._T_primary = self._T1 if self._primary_mono_left else self._T2
 
             self._H_left = np.matmul(
-                np.matmul(self._K_right, self._R1_left), np.linalg.inv(self._K_left)
+                np.matmul(self._K_right, self._R1), np.linalg.inv(self._K_left)
             )
             self._H_right = np.matmul(
-                np.matmul(self._K_right, self._R1_left), np.linalg.inv(self._K_right)
+                np.matmul(self._K_right, self._R1), np.linalg.inv(self._K_right)
             )
 
             self._l2r_extrinsic = np.array(
@@ -320,45 +320,75 @@ class OAK_Camera:
                     (cx - cy) / baseline,
                 ]
             ).reshape(4, 4)
-        self._Q_left = _create_Q_matrix(self._fx_left, self._fy_left, self._cx_left, self._cy_left, self._baseline)
-        self._Q_right = _create_Q_matrix(self._fx_right, self._fy_right, self._cx_right, self._cy_right, self._baseline)
+
+        self._Q_left = _create_Q_matrix(
+            self._fx_left, self._fy_left, self._cx_left, self._cy_left, self._baseline
+        )
+        self._Q_right = _create_Q_matrix(
+            self._fx_right,
+            self._fy_right,
+            self._cx_right,
+            self._cy_right,
+            self._baseline,
+        )
         self._Q_primary = self._Q_left if self._primary_mono_left else self._Q_right
 
-        # run cv2.stereoRectify
         (
-            self._R1,
-            self._P1,
-            self._R2,
-            self._P2,
-            Q_primary_new,
+            R1,
+            R2,
+            P1,
+            P2,
+            Q,
             self._valid_region_left,
             self._valid_region_right,
         ) = cv2.stereoRectify(
-            cameraMatrix1=self._K_left,
-            distCoeffs1=self._D_left,
-            cameraMatrix2=self._K_right,
-            distCoeffs2=self._D_right,
-            imageSize=(self._mono_size[0], self._mono_size[1]),
-            R=self._R_primary,
-            T=self._T_primary,
+            self._K_left,
+            self._D_left,
+            self._K_right,
+            self._D_right,
+            (self._mono_size[0], self._mono_size[1]),
+            self._R_primary,
+            self._T_primary,
         )
+        self.map_left_1, self.map_left_2 = cv2.initUndistortRectifyMap(
+            self._K_left,
+            self._D_left,
+            R1,
+            P1,
+            (self._mono_size[0], self._mono_size[1]),
+            cv2.CV_16SC2,
+        )
+        self.map_right_1, self.map_right_2 = cv2.initUndistortRectifyMap(
+            self._K_right,
+            self._D_right,
+            R2,
+            P2,
+            (self._mono_size[0], self._mono_size[1]),
+            cv2.CV_16SC2,
+        )
+
         self._primary_valid_region = (
             self._valid_region_left
             if self._primary_mono_left
             else self._valid_region_right
         )
-        self._Q_primary = Q_primary_new if self._use_cv2_Q else self._Q_primary
+        self._Q_primary = Q if self._use_cv2_Q_matrix else self._Q_primary
 
-        # run cv2.getOptimalNewCameraMatrix
-        self._P_rgb, self._valid_region_rgb = cv2.getOptimalNewCameraMatrix(self._K_rgb, self._D_rgb, (self._rgb_size[0], self._rgb_size[1]), 1, (self._rgb_size[0], self._rgb_size[1]))
+        # run cv2.getOptimalNewCameraMatrix for RGB cam
+        self._P_rgb, self._valid_region_rgb = cv2.getOptimalNewCameraMatrix(
+            self._K_rgb,
+            self._D_rgb,
+            (self._rgb_size[1], self._rgb_size[0]),
+            1,
+            (self._rgb_size[1], self._rgb_size[0]),
+        )
         self._map_rgb_1, self._map_rgb_2 = cv2.initUndistortRectifyMap(
-            self._K_rgb, self._D_rgb, None, self._P_rgb, (self._rgb_size[0], self._rgb_size[1]), cv2.CV_16SC2
-        )
-        self._map_left_1, self._map_left_2 = cv2.initUndistortRectifyMap(
-            self._K_left, self._D_left, self._R1, self._P1, (self._mono_size[0], self._mono_size[1]), cv2.CV_16SC2
-        )
-        self._map_right_1, self._map_right_2 = cv2.initUndistortRectifyMap(
-            self._K_right, self._D_right, self._R2, self._P2, (self._mono_size[0], self._mono_size[1]), cv2.CV_16SC2
+            self._K_rgb,
+            self._D_rgb,
+            None,
+            self._P_rgb,
+            (self._rgb_size[0], self._rgb_size[1]),
+            cv2.CV_16SC2,
         )
 
         self._o3d_pinhole_camera_intrinsic = o3d.camera.PinholeCameraIntrinsic(
@@ -429,7 +459,7 @@ class OAK_Camera:
         Get the rgb color frame
         """
         return self._rgb_frame
-    
+
     @property
     def rectified_rgb(self) -> Optional[np.ndarray]:
         """
@@ -774,7 +804,12 @@ class OAK_Camera:
                         data = queue.get()
                         if name == "rgb":
                             self._rgb_frame = data.getCvFrame()
-                            self._rectified_rgb_frame = cv2.remap(self._rgb_frame, self._map_rgb_1, self._map_rgb_2, cv2.INTER_LINEAR)
+                            self._rectified_rgb_frame = cv2.remap(
+                                self._rgb_frame,
+                                self._map_rgb_1,
+                                self._map_rgb_2,
+                                cv2.INTER_LINEAR,
+                            )
                         elif name == "left":
                             self._left_frame = data.getCvFrame()
                         elif name == "right":

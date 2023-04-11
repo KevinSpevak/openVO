@@ -199,15 +199,18 @@ class OAK_Camera:
                     dai.CameraBoardSocket.RGB, self._rgb_size[0], self._rgb_size[1]
                 )
             )
-            self._focal_rgb = self._K_rgb[0][0]
+            self._fx_rgb = self._K_rgb[0][0]
+            self._fy_rgb = self._K_rgb[1][1]
             self._cx_rgb = self._K_rgb[0][2]
             self._cy_rgb = self._K_rgb[1][2]
+
             self._K_left = np.array(
                 calibData.getCameraIntrinsics(
                     dai.CameraBoardSocket.LEFT, self._mono_size[0], self._mono_size[1]
                 )
             )
-            self._focal_left = self._K_left[0][0]
+            self._fx_left = self._K_left[0][0]
+            self._fy_left = self._K_left[1][1]
             self._cx_left = self._K_left[0][2]
             self._cy_left = self._K_left[1][2]
             self._K_right = np.array(
@@ -215,7 +218,9 @@ class OAK_Camera:
                     dai.CameraBoardSocket.RIGHT, self._mono_size[0], self._mono_size[1]
                 )
             )
-            self._focal_right = self._K_right[0][0]
+
+            self._fx_right = self._K_right[0][0]
+            self._fy_right = self._K_right[1][1]
             self._cx_right = self._K_right[0][2]
             self._cy_right = self._K_right[1][2]
             self._D_left = np.array(
@@ -224,9 +229,15 @@ class OAK_Camera:
             self._D_right = np.array(
                 calibData.getDistortionCoefficients(dai.CameraBoardSocket.RIGHT)
             )
+
             self._rgb_fov = calibData.getFov(dai.CameraBoardSocket.RGB)
             self._mono_fov = calibData.getFov(dai.CameraBoardSocket.LEFT)
+
             self._K_primary = self._K_left if self._primary_mono_left else self._K_right
+            self._fx_primary = self._fx_left if self._primary_mono_left else self._fx_right
+            self._fy_primary = self._fy_left if self._primary_mono_left else self._fy_right
+            self._cx_primary = self._cx_left if self._primary_mono_left else self._cx_right
+            self._cy_primary = self._cy_left if self._primary_mono_left else self._cy_right
 
             self._R1 = np.array(calibData.getStereoLeftRectificationRotation())
             self._R2 = np.array(calibData.getStereoRightRectificationRotation())
@@ -276,7 +287,7 @@ class OAK_Camera:
                 0,
                 0,
                 0,
-                self._focal_left,
+                (self._fx_left + self._fy_left) // 2,
                 0,
                 0,
                 -1 / self._baseline,
@@ -296,7 +307,7 @@ class OAK_Camera:
                 0,
                 0,
                 0,
-                self._focal_right,
+                (self._fx_left + self._fy_left) // 2,
                 0,
                 0,
                 -1 / self._baseline,
@@ -387,6 +398,9 @@ class OAK_Camera:
         self._display_thread = Thread(target=self._display)
         self._display_stopped = False
 
+        # Condition for data
+        self._data_condition = Condition()
+
         # set atexit methods
         atexit.register(self.stop)
 
@@ -474,11 +488,13 @@ class OAK_Camera:
         """
         return self._cam_thread.is_alive()
 
-    def start(self) -> None:
+    def start(self, block=True) -> None:
         """
         Starts the camera
         """
         self._cam_thread.start()
+        if block:
+            self.wait_for_data()
 
     def stop(self) -> None:
         """
@@ -499,13 +515,26 @@ class OAK_Camera:
 
         # close displays
         cv2.destroyAllWindows()
+
+    def wait_for_data(self) -> None:
+        """
+        Blocks until a full set of data has arrived from the camera
+        """
+        with self._data_condition:
+            self._data_condition.wait()
         
     def _display(self) -> None:
+        with self._data_condition:
+            self._data_condition.wait()
         while not self._display_stopped:
             if self._rgb_frame is not None and self._display_rgb:
                 cv2.imshow("rgb", cv2.resize(self._rgb_frame, self._display_size))
             if self._disparity is not None and self._display_disparity:
-                cv2.imshow("disparity", cv2.resize(self._disparity, self._display_size))
+                frame = (self._disparity * (255 / self._stereo_confidence_threshold)).astype(np.uint8)
+                frame = cv2.resize(frame, self._display_size)
+                cv2.imshow("disparity-gray", frame)
+                frame = cv2.applyColorMap(frame, cv2.COLORMAP_JET)
+                cv2.imshow("disparity-color", frame)
             if self._depth is not None and self._display_depth:
                 cv2.imshow("depth", cv2.resize(self._depth, self._display_size))
             if self._left_frame is not None and self._display_mono:
@@ -569,6 +598,7 @@ class OAK_Camera:
         left = self._pipeline.create(dai.node.MonoCamera)
         right = self._pipeline.create(dai.node.MonoCamera)
         stereo = self._pipeline.create(dai.node.StereoDepth)
+        stereo.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.HIGH_DENSITY)
         xout_left = self._pipeline.create(dai.node.XLinkOut)
         xout_right = self._pipeline.create(dai.node.XLinkOut)
         xout_depth = self._pipeline.create(dai.node.XLinkOut)
@@ -662,7 +692,7 @@ class OAK_Camera:
             rgbd_image,
             self._o3d_pinhole_camera_intrinsic,
         )
-        pcd = pcd.voxel_down_sample(voxel_size=0.01)
+        # pcd = pcd.voxel_down_sample(voxel_size=0.01)
         pcd = pcd.remove_statistical_outlier(30, 0.1)[0]
 
         if self._point_cloud is None:
@@ -670,6 +700,23 @@ class OAK_Camera:
         else:
             self._point_cloud.points = pcd.points
             self._point_cloud.colors = pcd.colors
+
+    def _update_im3d(self) -> None:
+        # # Create a 2D grid of pixel coordinates
+        # height, width = self._depth.shape
+        # u, v = np.meshgrid(np.arange(width), np.arange(height))
+
+        # # Convert pixel coordinates to camera coordinates
+        # x = (u - self._cx_primary) / self._fx_primary
+        # y = (v - self._cy_primary) / self._fy_primary
+        # z = self._depth
+
+        # # Stack x, y, and z coordinates into a 3D point cloud
+        # im3d = np.stack((x, y, z), axis=-1)
+
+        # self._im3d = im3d
+
+        self._im3d = cv2.reprojectImageTo3D(self._disparity, self._Q_primary)
 
     def _target(self) -> None:
         if self._enable_rgb:
@@ -746,8 +793,7 @@ class OAK_Camera:
                 )
                 # handle 3d images and odometry packets
                 if not self._compute_im3d_on_demand:
-                    # TODO: switch to spatial calculations using depth ai
-                    self._im3d = cv2.reprojectImageTo3D(self._disparity, self._Q_primary)
+                    self._update_im3d()
                 self._3d_packet = (
                     self._im3d,
                     self._disparity,
@@ -756,6 +802,9 @@ class OAK_Camera:
                 # handle the point cloud
                 if not self._compute_point_cloud_on_demand:
                     self._update_point_cloud()
+                
+                with self._data_condition:
+                    self._data_condition.notify_all()
 
     def _crop_to_valid_region(self, img: np.ndarray) -> np.ndarray:
         return img[
@@ -787,10 +836,8 @@ class OAK_Camera:
         if im3d is None and disparity is None and rect is None:
             return None, None, None
         if self._compute_im3d_on_demand:
-            # disparity = disparity.astype(np.float32)/16
-            # TODO: switch to spatial calculations using depth ai
-            im3d = cv2.reprojectImageTo3D(disparity, self._Q_primary)
-            self._im3d = im3d
+            self._update_im3d()
+            im3d = self._im3d
         return (
             self._crop_to_valid_region(im3d),
             self._crop_to_valid_region(disparity),

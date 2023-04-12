@@ -67,4 +67,6 @@ while left_vid.isOpened() and right_vid.isOpened():
 
     # display the frames
     cv2.imshow("left", left_frame)
-    cv2.waitKey(1)
+    # kill program if q is pressed
+    if cv2.waitKey(1) & 0xFF == ord("q"):
+        break

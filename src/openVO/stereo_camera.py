@@ -24,6 +24,13 @@ class StereoCamera:
     def __init__(
         self, K_left, dist_left, K_right, dist_right, rect_params, sgbm_params, img_size
     ):
+        self.K_left = K_left
+        self.dist_left = dist_left
+        self.K_right = K_right
+        self.dist_right = dist_right
+        self.rectParams = rect_params
+        self.sgbmParams = sgbm_params
+        self.img_size = img_size
         (
             R1,
             R2,

@@ -198,7 +198,7 @@ class OAK_Camera:
                 self._median_filter = dai.StereoDepthProperties.MedianFilter.MEDIAN_OFF
 
         with dai.Device() as device:
-            calibData = device.readCalibration()
+            calibData = device.readCalibration2()
 
             self._K_rgb = np.array(
                 calibData.getCameraIntrinsics(
@@ -265,13 +265,13 @@ class OAK_Camera:
                     srcCamera=dai.CameraBoardSocket.LEFT,
                     dstCamera=dai.CameraBoardSocket.RIGHT,
                 )
-            )
+            ) / 100  # convert to meters
             self._T2 = np.array(
                 calibData.getCameraTranslationVector(
                     srcCamera=dai.CameraBoardSocket.RIGHT,
                     dstCamera=dai.CameraBoardSocket.LEFT,
                 )
-            )
+            ) / 100  # convert to meters
             self._T_primary = self._T1 if self._primary_mono_left else self._T2
 
             self._H_left = np.matmul(
@@ -297,7 +297,7 @@ class OAK_Camera:
                 self._l2r_extrinsic if self._primary_mono_left else self._r2l_extrinsic
             )
 
-            self._baseline = calibData.getBaselineDistance()  # in centimeters
+            self._baseline = calibData.getBaselineDistance() / 100  # in meters
 
         def _create_Q_matrix(fx, fy, cx, cy, baseline):
             return np.array(
@@ -350,7 +350,7 @@ class OAK_Camera:
             self._R_primary,
             self._T_primary,
         )
-        self.map_left_1, self.map_left_2 = cv2.initUndistortRectifyMap(
+        self._map_left_1, self._map_left_2 = cv2.initUndistortRectifyMap(
             self._K_left,
             self._D_left,
             R1,
@@ -358,7 +358,7 @@ class OAK_Camera:
             (self._mono_size[0], self._mono_size[1]),
             cv2.CV_16SC2,
         )
-        self.map_right_1, self.map_right_2 = cv2.initUndistortRectifyMap(
+        self._map_right_1, self._map_right_2 = cv2.initUndistortRectifyMap(
             self._K_right,
             self._D_right,
             R2,
@@ -766,20 +766,6 @@ class OAK_Camera:
             self._point_cloud.colors = pcd.colors
 
     def _update_im3d(self) -> None:
-        # # Create a 2D grid of pixel coordinates
-        # height, width = self._depth.shape
-        # u, v = np.meshgrid(np.arange(width), np.arange(height))
-
-        # # Convert pixel coordinates to camera coordinates
-        # x = (u - self._cx_primary) / self._fx_primary
-        # y = (v - self._cy_primary) / self._fy_primary
-        # z = self._depth
-
-        # # Stack x, y, and z coordinates into a 3D point cloud
-        # im3d = np.stack((x, y, z), axis=-1)
-
-        # self._im3d = im3d
-
         self._im3d = cv2.reprojectImageTo3D(self._disparity, self._Q_primary)
 
     def _target(self) -> None:

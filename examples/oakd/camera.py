@@ -16,9 +16,6 @@ def target():
         # when on_demand flag is set to true, computed only when the function is called
         cam.compute_im3d()
         cam.compute_point_cloud()
-
-        im3d = cv2.reprojectImageTo3D(cam.disparity, cam._Q_primary)
-
         time.sleep(1)
 
 

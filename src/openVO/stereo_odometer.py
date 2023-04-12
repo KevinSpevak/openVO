@@ -143,7 +143,7 @@ class StereoOdometer:
         self.current_kps, self.current_desc = next_kps, next_desc
 
     def update(self, img_left, img_right):
-        next_3d, next_disp, next_img = self.stereo.compute_im3d(
+        next_3d, next_disp, next_img = self.stereo.compute_3d(
             img_left, img_right, preprocessed=self.preprocessed_frames
         )
         next_kps, next_desc = self.orb.detectAndCompute(

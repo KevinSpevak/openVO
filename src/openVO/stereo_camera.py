@@ -86,7 +86,7 @@ class StereoCamera:
             self.valid_region_right[0] : self.valid_region_right[2],
         ]
 
-    def compute_3d(self, img_left, img_right, preprocessed=False):
+    def compute_im3d(self, img_left, img_right, preprocessed=False):
         if len(img_left.shape) == 3:
             img_left = cv2.cvtColor(img_left, cv2.COLOR_BGR2GRAY)
         if len(img_right.shape) == 3:

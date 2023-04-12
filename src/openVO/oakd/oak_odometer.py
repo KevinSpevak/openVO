@@ -1,5 +1,3 @@
-from threading import Thread
-
 import cv2
 import numpy as np
 
@@ -52,16 +50,6 @@ class OAK_Odometer:
         self.c_T_w_prev = np.eye(4)
 
         self.skip_cause = ""
-
-        self._update_thread = Thread(target=self._update)
-        self._stopped = False
-
-    def start(self):
-        self._update_thread.start()
-
-    def stop(self):
-        self._stopped = True
-        self._update_thread.join()
 
     # image mask for pixels with acceptable disparity values
     def feature_mask(self, disparity):
@@ -154,7 +142,7 @@ class OAK_Odometer:
         self.prev_kps, self.prev_desc = self.current_kps, self.current_desc
         self.current_kps, self.current_desc = next_kps, next_desc
 
-    def _update(self):
+    def update(self):
         next_3d, next_disp, next_img = self.stereo.compute_im3d()
         next_kps, next_desc = self.orb.detectAndCompute(
             next_img, self.feature_mask(next_disp)
@@ -302,7 +290,3 @@ class OAK_Odometer:
 
     def current_pose(self):
         return np.linalg.inv(self.c_T_w)
-
-    def _run(self):
-        while not self._stopped:
-            self._update()

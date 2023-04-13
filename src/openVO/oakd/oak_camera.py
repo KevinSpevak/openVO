@@ -17,10 +17,6 @@ import open3d as o3d
 # TODO: Implement all from link
 # https://docs.luxonis.com/projects/api/en/latest/components/nodes/stereo_depth/#currently-configurable-blocks
 
-# TODO: set fpa rgb and mono cameras
-
-# TODO: implement wait for data method using conditions
-
 
 # KNOWN BUGS:
 # - Enabling the speckle filter crashes the camera
@@ -94,8 +90,8 @@ class OAK_Camera:
         stereo_spatial_filter_enable: bool = True,
         stereo_spatial_filter_radius: int = 2,
         stereo_spatial_filter_num_iterations: int = 1,
-        stereo_threshold_filter_min_range: int = 400,
-        stereo_threshold_filter_max_range: int = 15000,
+        stereo_threshold_filter_min_range: int = 200,
+        stereo_threshold_filter_max_range: int = 20000,
         stereo_decimation_filter_factor: int = 1,
         enable_imu: bool = True,
         imu_batch_report_threshold: int = 20,

@@ -1,4 +1,5 @@
 import os
+import time
 import pickle
 
 import cv2
@@ -28,10 +29,10 @@ stereo_camera = StereoCamera.from_pfiles(
 # create the odometry object
 odometer = StereoOdometer(
     stereo_camera,
-    nfeatures=500,
+    nfeatures=1000,
     match_threshold=0.9,
     rigidity_threshold=0.06,
-    outlier_threshold=0.02,
+    outlier_threshold=0.1,
     preprocessed_frames=False,
     min_matches=10,
 )
@@ -54,13 +55,15 @@ while left_vid.isOpened() and right_vid.isOpened():
         break
 
     # compute the odometry
+    start_time = time.perf_counter()
     odometer.update(left_frame, right_frame)
+    print(f"Elapsed time for odometer update: {time.perf_counter() - start_time}")
 
     # get the current pose
     pose = odometer.current_pose()
 
-    # print the pose
-    print(pose)
+    # # print the pose
+    # print(pose)
 
     # draw the pose on the image
     drawPoseOnImage(pose, left_frame)

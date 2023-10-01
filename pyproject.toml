@@ -7,8 +7,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openVO"
-version = "0.0.7"
+version = "0.1.0"
 authors = [
+    {name="Kevin Spevak", email="kevinspevak@gmail.com"},
+]
+maintainers = [
     {name="Kevin Spevak", email="kevinspevak@gmail.com"},
 ]
 description = "Visual Odometry in python with openCV"

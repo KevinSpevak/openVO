@@ -1,8 +1,11 @@
+from __future__ import annotations
+
 import cv2
 import numpy as np
+from oakutils import LegacyCamera
 
 
-class StereoOdometer:
+class OAK_Odometer:
     # Range for disparities where we can get an accurate depth calculation
     MIN_VALID_DISPARITY = 4  # pixels
     MAX_VALID_DISPARITY = 100  # pixels
@@ -14,14 +17,16 @@ class StereoOdometer:
 
     def __init__(
         self,
-        stereo_camera,
+        stereo_camera: LegacyCamera | None = None,
         nfeatures=500,
-        match_threshold=0.8,
-        rigidity_threshold=0,
-        outlier_threshold=0,
+        match_threshold=0.9,
+        rigidity_threshold=0.06,
+        outlier_threshold=0.02,
         preprocessed_frames=False,
         min_matches=10,
     ):
+        if stereo_camera is None:
+            stereo_camera = LegacyCamera()
         self.stereo = stereo_camera
         # image data for current and previous frames
         self.current_img, self.current_disparity, self.current_3d = None, None, None
@@ -142,10 +147,8 @@ class StereoOdometer:
         self.prev_kps, self.prev_desc = self.current_kps, self.current_desc
         self.current_kps, self.current_desc = next_kps, next_desc
 
-    def update(self, img_left, img_right):
-        next_3d, next_disp, next_img = self.stereo.compute_3d(
-            img_left, img_right, preprocessed=self.preprocessed_frames
-        )
+    def update(self):
+        next_3d, next_disp, next_img = self.stereo.compute_im3d()
         next_kps, next_desc = self.orb.detectAndCompute(
             next_img, self.feature_mask(next_disp)
         )

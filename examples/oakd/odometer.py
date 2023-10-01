@@ -1,16 +1,10 @@
-import time
-
 import cv2
 from openVO import drawPoseOnImage
-from openVO.oakd import OAK_Camera, OAK_Odometer
+from openVO.oakd import OAK_Odometer
 
 
-STOPPED = False
-
-
-cam = OAK_Camera()
-cam.start(block=True)
-odom = OAK_Odometer(cam)
+odom = OAK_Odometer()
+cam = odom.stereo
 
 while True:
     odom.update()

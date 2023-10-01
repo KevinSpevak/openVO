@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import cv2
 import numpy as np
+from oakutils import LegacyCamera
 
 
 class OAK_Odometer:
@@ -14,7 +17,7 @@ class OAK_Odometer:
 
     def __init__(
         self,
-        stereo_camera,
+        stereo_camera: LegacyCamera | None = None,
         nfeatures=500,
         match_threshold=0.9,
         rigidity_threshold=0.06,
@@ -22,6 +25,8 @@ class OAK_Odometer:
         preprocessed_frames=False,
         min_matches=10,
     ):
+        if stereo_camera is None:
+            stereo_camera = LegacyCamera()
         self.stereo = stereo_camera
         # image data for current and previous frames
         self.current_img, self.current_disparity, self.current_3d = None, None, None
